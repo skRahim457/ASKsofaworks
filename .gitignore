@@ -1,0 +1,25 @@
+# Node dependencies
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Production builds
+frontend/dist/
+dist/
+
+# Databases
+backend/database.sqlite
+backend/database.sqlite-journal
+*.db
+*.sqlite
+
+# Environment configuration
+.env
+backend/.env
+frontend/.env
+.env.local
+.env.*.local
+
+# OS system files
+.DS_Store
+Thumbs.db
