@@ -1490,3 +1490,5 @@ app.get(/.*/, (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend server is running on port ${PORT}`);
 });
+
+module.exports = app;
