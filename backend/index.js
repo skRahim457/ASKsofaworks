@@ -3,11 +3,13 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { initDatabase, dbRun, dbAll, dbGet } = require('./db');
+const mongoose = require('mongoose');
+const { connectToDatabase, initDatabase } = require('./db');
+const { User, Product, Order, Review, Wishlist, LoginHistory, Inquiry } = require('./models');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = 'asksofaworks_secret_key_2026_premium_furniture';
+const JWT_SECRET = process.env.JWT_SECRET || 'asksofaworks_secret_key_2026_premium_furniture';
 
 const path = require('path');
 const fs = require('fs');
@@ -18,18 +20,39 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Middleware
-app.use(cors());
+// CORS Config
+const allowedOrigins = [
+  'https://asksofaworks.netlify.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://localhost'
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('http://localhost') || origin.endsWith('.lhr.life') || origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    return callback(new Error('CORS Policy block: Origin not allowed'), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json({ limit: '20mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
 
-// Initialize Database
-initDatabase()
+// Connect to MongoDB
+connectToDatabase()
+  .then(() => initDatabase())
   .then(() => {
-    console.log('Database initialized successfully.');
+    console.log('MongoDB initialized successfully.');
   })
   .catch((err) => {
-    console.error('Database initialization failed:', err);
+    console.error('Database connection / initialization failed:', err);
   });
 
 // JWT Authentication Middleware
@@ -59,55 +82,34 @@ const authorizeAdmin = (req, res, next) => {
   }
 };
 
-// ==========================================
-// 1. AUTHENTICATION ENDPOINTS
-// ==========================================
-
-// Register User
-app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password, mobile } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: 'Name, email, and password are required' });
+// Admin or Seller Authorization Middleware
+const authorizeAdminOrSeller = (req, res, next) => {
+  if (req.user && (req.user.role === 'admin' || req.user.role === 'seller')) {
+    next();
+  } else {
+    res.status(403).json({ message: 'Access denied. Privileged role required.' });
   }
+};
 
+// Helper to log login history
+async function logLoginAttempt(userId, name, identifier, method, status, errorReason, req) {
   try {
-    // Check if user already exists
-    const existingUser = await dbGet('SELECT * FROM users WHERE email = ?', [email]);
-    if (existingUser) {
-      return res.status(400).json({ message: 'An account with this email already exists' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await dbRun(
-      'INSERT INTO users (name, email, password, role, mobile) VALUES (?, ?, ?, ?, ?)',
-      [name, email, hashedPassword, 'customer', mobile || '']
-    );
-
-    const token = jwt.sign({ id: result.lastID, email, role: 'customer' }, JWT_SECRET, { expiresIn: '36500d' });
-
-    res.status(201).json({
-      token,
-      user: {
-        id: result.lastID,
-        name,
-        email,
-        role: 'customer',
-        mobile: mobile || '',
-        address: '',
-        city: '',
-        state: '',
-        pincode: ''
-      }
+    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    await LoginHistory.create({
+      user_id: userId,
+      name: name || 'Anonymous',
+      identifier,
+      method,
+      status,
+      error_reason: errorReason,
+      ip_address: ipAddress
     });
-  } catch (error) {
-    console.error('Register error:', error);
-    res.status(500).json({ message: 'Error registering user' });
+  } catch (err) {
+    console.error('Failed to log login attempt:', err.message);
   }
-});
+}
 
-// OTP Storage map: mobile -> { otp, name, expires }
-// Initialize Firebase Admin SDK
+// Initialize Firebase Admin SDK if credentials provided
 const admin = require('firebase-admin');
 let firebaseEnabled = false;
 
@@ -133,202 +135,47 @@ try {
   console.error('[Firebase Auth Error] Initialization failed:', e.message);
 }
 
-// Helper to log an authentication attempt
-async function logLoginAttempt(userId, name, identifier, method, status, errorReason, req) {
+// Helper to safely parse arrays from DB output
+const safeParseArray = (val, defaultVal = []) => {
+  if (!val) return defaultVal;
+  if (Array.isArray(val)) return val;
   try {
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    await dbRun(
-      `INSERT INTO login_history (user_id, name, identifier, method, status, error_reason, ip_address)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, name || 'Anonymous', identifier, method, status, errorReason, ipAddress]
-    );
-  } catch (err) {
-    console.error('Failed to log login attempt:', err.message);
+    return typeof val === 'string' ? JSON.parse(val) : val;
+  } catch (e) {
+    return defaultVal;
   }
-}
+};
 
-// Secure Firebase ID Token Login and Register
-app.post('/api/auth/firebase-login', async (req, res) => {
-  const { idToken, name } = req.body;
-  if (!idToken) {
-    return res.status(400).json({ message: 'Firebase ID Token is required' });
+// ==========================================
+// 1. AUTHENTICATION ENDPOINTS
+// ==========================================
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+  const { name, email, password, mobile } = req.body;
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'Name, email, and password are required' });
   }
 
-  // Developer Sandbox Mock Bypass
-  if (idToken === 'mock-demo-token') {
-    const { mobile } = req.body;
-    if (!mobile || !/^\d{10}$/.test(mobile.trim())) {
-      await logLoginAttempt(null, name || 'Anonymous', mobile || 'unknown', 'otp', 'failure', 'Invalid mobile number format', req);
-      return res.status(400).json({ message: 'A valid 10-digit mobile number is required' });
+  try {
+    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+    if (existingUser) {
+      return res.status(400).json({ message: 'An account with this email already exists' });
     }
 
-    try {
-      let user = await dbGet('SELECT * FROM users WHERE mobile = ?', [mobile.trim()]);
-      if (!user) {
-        const email = `otp_user_${mobile.trim()}@asksofaworks.com`;
-        const dummyPassword = await bcrypt.hash(Math.random().toString(), 10);
-        
-        const result = await dbRun(
-          'INSERT INTO users (name, email, password, role, mobile) VALUES (?, ?, ?, ?, ?)',
-          [name || 'OTP Customer', email, dummyPassword, 'customer', mobile.trim()]
-        );
-        
-        user = {
-          id: result.lastID,
-          name: name || 'OTP Customer',
-          email,
-          role: 'customer',
-          mobile: mobile.trim(),
-          address: '',
-          city: '',
-          state: '',
-          pincode: ''
-        };
-      }
-
-      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-      console.log(`[Secure Firebase Auth Sandbox] User +91 ${mobile.trim()} authenticated successfully (Mock Mode).`);
-      
-      // Log successful login
-      await logLoginAttempt(user.id, user.name, mobile.trim(), 'otp', 'success', null, req);
-
-      return res.json({
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          mobile: user.mobile || '',
-          address: user.address || '',
-          city: user.city || '',
-          state: user.state || '',
-          pincode: user.pincode || ''
-        }
-      });
-    } catch (err) {
-      console.error('[Secure Firebase Auth Sandbox] Database error:', err.message);
-      await logLoginAttempt(null, name || 'Anonymous', mobile.trim(), 'otp', 'failure', err.message, req);
-      return res.status(500).json({ message: 'Database error occurred during mock verification' });
-    }
-  }
-
-  if (!firebaseEnabled) {
-    await logLoginAttempt(null, name || 'Anonymous', 'real-otp-requested', 'otp', 'failure', 'Firebase Auth not configured on backend', req);
-    return res.status(500).json({ 
-      message: 'Firebase Authentication is not configured on the server. Please define FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your backend .env file.' 
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      name,
+      email: email.toLowerCase().trim(),
+      password: hashedPassword,
+      role: 'customer',
+      mobile: mobile || ''
     });
-  }
 
-  try {
-    // 1. Verify the Firebase ID Token securely
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const phoneNumberWithCountryCode = decodedToken.phone_number;
-
-    if (!phoneNumberWithCountryCode) {
-      await logLoginAttempt(null, name || 'Anonymous', 'invalid-token-payload', 'otp', 'failure', 'Phone number missing in token payload', req);
-      return res.status(400).json({ message: 'Decoded Firebase token does not contain a verified phone number' });
-    }
-
-    // 2. Extract standard 10-digit mobile number by stripping country code (+91)
-    let mobile = phoneNumberWithCountryCode;
-    if (mobile.startsWith('+91')) {
-      mobile = mobile.substring(3);
-    } else if (mobile.startsWith('+')) {
-      mobile = mobile.replace('+', '');
-    }
-
-    // 3. Database operations: Check if user exists or register dynamically
-    let user = await dbGet('SELECT * FROM users WHERE mobile = ?', [mobile]);
-    if (!user) {
-      const email = `otp_user_${mobile}@asksofaworks.com`;
-      const dummyPassword = await bcrypt.hash(Math.random().toString(), 10);
-      
-      const result = await dbRun(
-        'INSERT INTO users (name, email, password, role, mobile) VALUES (?, ?, ?, ?, ?)',
-        [name || 'OTP Customer', email, dummyPassword, 'customer', mobile]
-      );
-      
-      user = {
-        id: result.lastID,
-        name: name || 'OTP Customer',
-        email,
-        role: 'customer',
-        mobile,
-        address: '',
-        city: '',
-        state: '',
-        pincode: ''
-      };
-    }
-
-    // 4. Generate custom JWT token for our Express server
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
 
-    console.log(`[Secure Firebase Auth] User +91 ${mobile} authenticated successfully.`);
-    
-    // Log successful login
-    await logLoginAttempt(user.id, user.name, mobile, 'otp', 'success', null, req);
-
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        mobile: user.mobile || '',
-        address: user.address || '',
-        city: user.city || '',
-        state: user.state || '',
-        pincode: user.pincode || ''
-      }
-    });
-  } catch (err) {
-    console.error('[Secure Firebase Auth] Verification failed:', err.message);
-    await logLoginAttempt(null, name || 'Anonymous', 'failed-verify-token', 'otp', 'failure', err.message, req);
-    res.status(401).json({ message: `Authentication failed: ${err.message || 'Invalid or expired Firebase token'}` });
-  }
-});
-
-// Google Authentication Sign In / Register
-app.post('/api/auth/google-login', async (req, res) => {
-  const { email, name, googleId } = req.body;
-  if (!email || !name) {
-    await logLoginAttempt(null, name || 'Anonymous', email || 'unknown', 'google', 'failure', 'Missing email or name', req);
-    return res.status(400).json({ message: 'Email and name are required' });
-  }
-
-  try {
-    let user = await dbGet('SELECT * FROM users WHERE email = ?', [email]);
-
-    if (!user) {
-      // Register new user dynamically
-      const dummyPassword = await bcrypt.hash(googleId || Math.random().toString(), 10);
-      const result = await dbRun(
-        'INSERT INTO users (name, email, password, role, mobile) VALUES (?, ?, ?, ?, ?)',
-        [name, email, dummyPassword, 'customer', '']
-      );
-
-      user = {
-        id: result.lastID,
-        name,
-        email,
-        role: 'customer',
-        mobile: '',
-        address: '',
-        city: '',
-        state: '',
-        pincode: ''
-      };
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-    
-    // Log successful Google sign-in
-    await logLoginAttempt(user.id, user.name, email, 'google', 'success', null, req);
-
-    res.json({
+    res.status(201).json({
       token,
       user: {
         id: user.id,
@@ -343,23 +190,29 @@ app.post('/api/auth/google-login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Google Sign-In database error:', error);
-    await logLoginAttempt(null, name || 'Anonymous', email, 'google', 'failure', error.message, req);
-    res.status(500).json({ message: 'Server error during Google sign-in' });
+    console.error('Register error:', error);
+    res.status(500).json({ message: 'Error registering user' });
   }
 });
 
-// Login User
+// Login
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body; // email field represents the login identifier (Email / Mobile)
+  const { email, password } = req.body;
 
   if (!email || !password) {
-    await logLoginAttempt(null, 'Anonymous', email || 'unknown', 'email', 'failure', 'Missing login identifier or password', req);
+    await logLoginAttempt(null, 'Anonymous', email || 'unknown', 'email', 'failure', 'Missing credentials', req);
     return res.status(400).json({ message: 'Mobile Number or Email Address and password are required' });
   }
 
   try {
-    const user = await dbGet('SELECT * FROM users WHERE email = ? OR mobile = ?', [email.trim(), email.trim()]);
+    const searchVal = email.trim();
+    const user = await User.findOne({ 
+      $or: [
+        { email: searchVal.toLowerCase() },
+        { mobile: searchVal }
+      ]
+    });
+
     if (!user) {
       await logLoginAttempt(null, 'Anonymous', email, 'email', 'failure', 'Account not found', req);
       return res.status(400).json({ message: 'This Mobile Number or Email Address is not registered. Please sign up or try again.' });
@@ -373,7 +226,6 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
 
-    // Log successful email login
     await logLoginAttempt(user.id, user.name, email, 'email', 'success', null, req);
 
     res.json({
@@ -400,10 +252,170 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Get Current User Profile
+// Firebase OTP login
+app.post('/api/auth/firebase-login', async (req, res) => {
+  const { idToken, name } = req.body;
+  if (!idToken) {
+    return res.status(400).json({ message: 'Firebase ID Token is required' });
+  }
+
+  // Developer Sandbox Mock Bypass
+  if (idToken === 'mock-demo-token') {
+    const { mobile } = req.body;
+    if (!mobile || !/^\d{10}$/.test(mobile.trim())) {
+      await logLoginAttempt(null, name || 'Anonymous', mobile || 'unknown', 'otp', 'failure', 'Invalid mobile number format', req);
+      return res.status(400).json({ message: 'A valid 10-digit mobile number is required' });
+    }
+
+    try {
+      let user = await User.findOne({ mobile: mobile.trim() });
+      if (!user) {
+        const email = `otp_user_${mobile.trim()}@asksofaworks.com`;
+        const dummyPassword = await bcrypt.hash(Math.random().toString(), 10);
+        
+        user = await User.create({
+          name: name || 'OTP Customer',
+          email,
+          password: dummyPassword,
+          role: 'customer',
+          mobile: mobile.trim()
+        });
+      }
+
+      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
+      await logLoginAttempt(user.id, user.name, mobile.trim(), 'otp', 'success', null, req);
+
+      return res.json({
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          mobile: user.mobile || '',
+          address: user.address || '',
+          city: user.city || '',
+          state: user.state || '',
+          pincode: user.pincode || ''
+        }
+      });
+    } catch (err) {
+      console.error('[Firebase Sandbox Auth] error:', err.message);
+      await logLoginAttempt(null, name || 'Anonymous', mobile.trim(), 'otp', 'failure', err.message, req);
+      return res.status(500).json({ message: 'Database error occurred during mock verification' });
+    }
+  }
+
+  if (!firebaseEnabled) {
+    await logLoginAttempt(null, name || 'Anonymous', 'real-otp-requested', 'otp', 'failure', 'Firebase Auth not configured on backend', req);
+    return res.status(500).json({ 
+      message: 'Firebase Authentication is not configured on the server. Please define FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in your backend .env file.' 
+    });
+  }
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const phoneNumberWithCountryCode = decodedToken.phone_number;
+
+    if (!phoneNumberWithCountryCode) {
+      await logLoginAttempt(null, name || 'Anonymous', 'invalid-token-payload', 'otp', 'failure', 'Phone number missing in token payload', req);
+      return res.status(400).json({ message: 'Decoded Firebase token does not contain a verified phone number' });
+    }
+
+    let mobile = phoneNumberWithCountryCode;
+    if (mobile.startsWith('+91')) {
+      mobile = mobile.substring(3);
+    } else if (mobile.startsWith('+')) {
+      mobile = mobile.replace('+', '');
+    }
+
+    let user = await User.findOne({ mobile: mobile.trim() });
+    if (!user) {
+      const email = `otp_user_${mobile.trim()}@asksofaworks.com`;
+      const dummyPassword = await bcrypt.hash(Math.random().toString(), 10);
+      
+      user = await User.create({
+        name: name || 'OTP Customer',
+        email,
+        password: dummyPassword,
+        role: 'customer',
+        mobile: mobile.trim()
+      });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
+    await logLoginAttempt(user.id, user.name, mobile.trim(), 'otp', 'success', null, req);
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        mobile: user.mobile || '',
+        address: user.address || '',
+        city: user.city || '',
+        state: user.state || '',
+        pincode: user.pincode || ''
+      }
+    });
+  } catch (err) {
+    console.error('[Firebase Auth] Verification failed:', err.message);
+    await logLoginAttempt(null, name || 'Anonymous', 'failed-verify-token', 'otp', 'failure', err.message, req);
+    res.status(401).json({ message: `Authentication failed: ${err.message || 'Invalid or expired Firebase token'}` });
+  }
+});
+
+// Google sign-in
+app.post('/api/auth/google-login', async (req, res) => {
+  const { email, name, googleId } = req.body;
+  if (!email || !name) {
+    await logLoginAttempt(null, name || 'Anonymous', email || 'unknown', 'google', 'failure', 'Missing credentials', req);
+    return res.status(400).json({ message: 'Email and name are required' });
+  }
+
+  try {
+    let user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      const dummyPassword = await bcrypt.hash(googleId || Math.random().toString(), 10);
+      user = await User.create({
+        name,
+        email: email.toLowerCase().trim(),
+        password: dummyPassword,
+        role: 'customer',
+        mobile: ''
+      });
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
+    await logLoginAttempt(user.id, user.name, email, 'google', 'success', null, req);
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        mobile: user.mobile || '',
+        address: user.address || '',
+        city: user.city || '',
+        state: user.state || '',
+        pincode: user.pincode || ''
+      }
+    });
+  } catch (error) {
+    console.error('Google Sign-In database error:', error);
+    await logLoginAttempt(null, name || 'Anonymous', email, 'google', 'failure', error.message, req);
+    res.status(500).json({ message: 'Server error during Google sign-in' });
+  }
+});
+
+// Get profile
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
-    const user = await dbGet('SELECT id, name, email, role, mobile, address, city, state, pincode, shop_name, shop_address, seller_status FROM users WHERE id = ?', [req.user.id]);
+    const user = await User.findById(req.user.id).select('-password');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -413,17 +425,15 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
-// Update Profile
+// Update profile
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   const { name, mobile, address, city, state, pincode } = req.body;
-
   try {
-    await dbRun(
-      'UPDATE users SET name = ?, mobile = ?, address = ?, city = ?, state = ?, pincode = ? WHERE id = ?',
-      [name, mobile, address, city, state, pincode, req.user.id]
-    );
-
-    const updatedUser = await dbGet('SELECT id, name, email, role, mobile, address, city, state, pincode, shop_name, shop_address, seller_status FROM users WHERE id = ?', [req.user.id]);
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { name, mobile, address, city, state, pincode },
+      { new: true }
+    ).select('-password');
     res.json(updatedUser);
   } catch (error) {
     console.error('Update profile error:', error);
@@ -431,76 +441,247 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// Apply Seller role
+app.post('/api/auth/apply-seller', authenticateToken, async (req, res) => {
+  const { shop_name, shop_address } = req.body;
+  if (!shop_name || !shop_address) {
+    return res.status(400).json({ message: 'Shop name and Shop address are required' });
+  }
+  try {
+    await User.findByIdAndUpdate(req.user.id, {
+      shop_name,
+      shop_address,
+      seller_status: 'pending'
+    });
+    res.json({ message: 'Seller application submitted successfully! Pending admin approval.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to submit seller application' });
+  }
+});
+
 // ==========================================
-// 2. PRODUCT ENDPOINTS
+// 2. ADMIN/SELLER ENDPOINTS
 // ==========================================
 
-// Get All Products (with filters, search, and sorting)
+// Get sellers list (Admin Only)
+app.get('/api/admin/sellers', authenticateToken, authorizeAdmin, async (req, res) => {
+  try {
+    const sellers = await User.find({
+      $or: [{ seller_status: 'pending' }, { role: 'seller' }]
+    }).select('id name email mobile role shop_name shop_address seller_status');
+    res.json(sellers);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to retrieve seller accounts' });
+  }
+});
+
+// Approve/Reject seller (Admin Only)
+app.post('/api/admin/approve-seller/:id', authenticateToken, authorizeAdmin, async (req, res) => {
+  const userId = req.params.id;
+  const { action } = req.body;
+  if (!action || (action !== 'approve' && action !== 'reject')) {
+    return res.status(400).json({ message: "Action must be 'approve' or 'reject'" });
+  }
+  try {
+    if (action === 'approve') {
+      await User.findByIdAndUpdate(userId, { role: 'seller', seller_status: 'approved' });
+      res.json({ message: 'User approved as a seller successfully!' });
+    } else {
+      await User.findByIdAndUpdate(userId, { 
+        role: 'customer', 
+        seller_status: 'none', 
+        shop_name: null, 
+        shop_address: null 
+      });
+      res.json({ message: 'Seller application rejected/revoked successfully.' });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to update seller role status' });
+  }
+});
+
+// Get Seller owned products (Admin/Seller)
+app.get('/api/seller/products', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+  try {
+    const sellerId = req.user.role === 'admin' ? (req.query.sellerId || null) : req.user.id;
+    const query = sellerId ? { seller_id: sellerId } : { seller_id: null };
+    const products = await Product.find(query);
+    res.json(products);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to retrieve seller products' });
+  }
+});
+
+// Get seller reviews (Admin/Seller)
+app.get('/api/seller/reviews', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+  try {
+    let reviews;
+    if (req.user.role === 'admin') {
+      reviews = await Review.find().populate('product_id');
+    } else {
+      const sellerProducts = await Product.find({ seller_id: req.user.id });
+      const productIds = sellerProducts.map(p => p._id);
+      reviews = await Review.find({ product_id: { $in: productIds } }).populate('product_id');
+    }
+    
+    const formatted = reviews.map(r => {
+      const prod = r.product_id || {};
+      return {
+        id: r.id,
+        user_id: r.user_id,
+        product_id: prod.id || null,
+        user_name: r.user_name,
+        rating: r.rating,
+        comment: r.comment,
+        created_at: r.created_at,
+        product_name: prod.name || 'Unknown Product',
+        product_image: prod.image_url || '',
+        real_images: safeParseArray(r.real_images)
+      };
+    });
+    res.json(formatted);
+  } catch (error) {
+    console.error('Error fetching seller reviews:', error);
+    res.status(500).json({ message: 'Error fetching customer reviews' });
+  }
+});
+
+// Get seller orders (Admin/Seller)
+app.get('/api/seller/orders', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+  try {
+    const isSeller = req.user.role === 'seller';
+    let orders;
+    
+    if (req.user.role === 'admin') {
+      orders = await Order.find().sort({ created_at: -1 });
+    } else {
+      const sellerProducts = await Product.find({ seller_id: req.user.id });
+      const productIds = sellerProducts.map(p => p._id.toString());
+      orders = await Order.find({ "items.product_id": { $in: productIds } }).sort({ created_at: -1 });
+    }
+
+    const flatItems = [];
+    orders.forEach(o => {
+      o.items.forEach(item => {
+        // If logged in as seller, only return the items they own
+        if (!isSeller || (item.product_id && allowedOrigins)) {
+          flatItems.push({
+            id: item.id,
+            order_id: o.id,
+            product_id: item.product_id ? item.product_id.toString() : null,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            price: item.price,
+            color: item.color,
+            size: item.size,
+            image_url: item.image_url,
+            upholstery: item.upholstery,
+            set_type: item.set_type,
+            feedback_permitted: item.feedback_permitted,
+            customer_received: o.customer_received,
+            delivery_response: o.delivery_response,
+            paid_amount: o.paid_amount,
+            payment_bill_img: o.payment_bill_img,
+            customer_name: o.name,
+            customer_mobile: o.mobile,
+            customer_email: o.email,
+            customer_address: o.address,
+            customer_city: o.city,
+            customer_state: o.state,
+            customer_pincode: o.pincode,
+            order_status: o.status,
+            payment_method: o.payment_method,
+            created_at: o.created_at
+          });
+        }
+      });
+    });
+    
+    res.json(flatItems);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to retrieve seller orders' });
+  }
+});
+
+// ==========================================
+// 3. PRODUCT ENDPOINTS
+// ==========================================
+
+// Get all products (Public)
 app.get('/api/products', async (req, res) => {
   const { category, search, material, color, sort } = req.query;
-
-  let query = `
-    SELECT p.*, COALESCE(avg_rev.avg_rating, 0) as rating, COALESCE(avg_rev.review_count, 0) as review_count
-    FROM products p
-    LEFT JOIN (
-      SELECT product_id, AVG(rating) as avg_rating, COUNT(id) as review_count
-      FROM reviews
-      GROUP BY product_id
-    ) avg_rev ON p.id = avg_rev.product_id
-    WHERE 1=1
-  `;
-  const params = [];
+  const filter = {};
 
   if (category && category !== 'all') {
-    query += ' AND p.category = ?';
-    params.push(category);
+    filter.category = category;
   }
 
   if (search) {
-    query += ' AND (p.name LIKE ? OR p.description LIKE ? OR p.material LIKE ?)';
-    const searchParam = `%${search}%`;
-    params.push(searchParam, searchParam, searchParam);
+    filter.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } },
+      { material: { $regex: search, $options: 'i' } }
+    ];
   }
 
   if (material) {
-    query += ' AND p.material LIKE ?';
-    params.push(`%${material}%`);
+    filter.material = { $regex: material, $options: 'i' };
   }
 
-  // Filter by color in JSON array or string (sqlite doesn't have native JSON operators, we use LIKE for simple string matching)
   if (color) {
-    query += ' AND p.colors LIKE ?';
-    params.push(`%${color}%`);
+    filter.colors = { $regex: color, $options: 'i' };
   }
 
-  // Sorting
+  let sortCriteria = { _id: 1 };
   if (sort === 'price_asc') {
-    query += ' ORDER BY COALESCE(p.discount_price, p.price) ASC';
+    sortCriteria = { price: 1 };
   } else if (sort === 'price_desc') {
-    query += ' ORDER BY COALESCE(p.discount_price, p.price) DESC';
+    sortCriteria = { price: -1 };
   } else if (sort === 'newest') {
-    query += ' ORDER BY p.created_at DESC';
-  } else if (sort === 'rating') {
-    query += ' ORDER BY rating DESC, review_count DESC';
+    sortCriteria = { created_at: -1 };
   } else if (sort === 'popular') {
-    // For simplicity, sort by stock availability or ID
-    query += ' ORDER BY p.stock DESC, p.id ASC';
-  } else {
-    // Default sorting
-    query += ' ORDER BY p.id ASC';
+    sortCriteria = { stock: -1 };
   }
 
   try {
-    const products = await dbAll(query, params);
-    // Parse JSON strings back to arrays
-    const formattedProducts = products.map(prod => ({
-      ...prod,
-      colors: JSON.parse(prod.colors),
-      sizes: JSON.parse(prod.sizes),
-      upholstery_types: prod.upholstery_types ? JSON.parse(prod.upholstery_types) : ['Cloth', 'Rexine'],
-      set_types: prod.set_types ? JSON.parse(prod.set_types) : [],
-      additional_images: prod.additional_images ? JSON.parse(prod.additional_images) : []
+    const products = await Product.find(filter).sort(sortCriteria);
+    
+    // Programmatically join reviews average rating and count
+    const formattedProducts = await Promise.all(products.map(async (prod) => {
+      const reviews = await Review.find({ product_id: prod._id });
+      const count = reviews.length;
+      const avg = count > 0 ? (reviews.reduce((sum, r) => sum + r.rating, 0) / count) : 0;
+      
+      return {
+        id: prod.id,
+        name: prod.name,
+        category: prod.category,
+        description: prod.description,
+        material: prod.material,
+        price: prod.price,
+        discount_price: prod.discount_price,
+        stock: prod.stock,
+        image_url: prod.image_url,
+        colors: safeParseArray(prod.colors),
+        sizes: safeParseArray(prod.sizes),
+        additional_images: safeParseArray(prod.additional_images),
+        upholstery_types: safeParseArray(prod.upholstery_types, ['Cloth', 'Rexine']),
+        set_types: safeParseArray(prod.set_types),
+        seller_id: prod.seller_id,
+        rating: avg,
+        review_count: count
+      };
     }));
+
+    if (sort === 'rating') {
+      formattedProducts.sort((a, b) => b.rating - a.rating || b.review_count - a.review_count);
+    }
+    
     res.json(formattedProducts);
   } catch (error) {
     console.error('Get products error:', error);
@@ -513,22 +694,18 @@ app.get('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
 
   try {
-    const product = await dbGet(`
-      SELECT p.*, COALESCE(avg_rev.avg_rating, 0) as rating, COALESCE(avg_rev.review_count, 0) as review_count
-      FROM products p
-      LEFT JOIN (
-        SELECT product_id, AVG(rating) as avg_rating, COUNT(id) as review_count
-        FROM reviews
-        GROUP BY product_id
-      ) avg_rev ON p.id = avg_rev.product_id
-      WHERE p.id = ?
-    `, [productId]);
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ message: 'Invalid Product ID format' });
+    }
+    const product = await Product.findById(productId);
 
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const reviews = await dbAll('SELECT * FROM reviews WHERE product_id = ? ORDER BY created_at DESC', [productId]);
+    const reviews = await Review.find({ product_id: productId }).sort({ created_at: -1 });
+    const count = reviews.length;
+    const avg = count > 0 ? (reviews.reduce((sum, r) => sum + r.rating, 0) / count) : 0;
 
     let isEligibleToReview = false;
     const authHeader = req.headers['authorization'];
@@ -536,36 +713,53 @@ app.get('/api/products/:id', async (req, res) => {
     if (token) {
       try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        const deliveredItem = await dbGet(`
-          SELECT oi.id, oi.feedback_permitted FROM orders o
-          JOIN order_items oi ON o.id = oi.order_id
-          WHERE o.user_id = ? AND oi.product_id = ? AND o.status = 'Delivered'
-          LIMIT 1
-        `, [decoded.id, productId]);
+        const deliveredOrder = await Order.findOne({
+          user_id: decoded.id,
+          status: 'Delivered',
+          "items.product_id": productId
+        });
         
-        if (deliveredItem && deliveredItem.feedback_permitted === 1) {
-          const existingReview = await dbGet(`
-            SELECT id FROM reviews WHERE user_id = ? AND product_id = ? LIMIT 1
-          `, [decoded.id, productId]);
-          if (!existingReview) {
-            isEligibleToReview = true;
+        if (deliveredOrder) {
+          const item = deliveredOrder.items.find(i => i.product_id && i.product_id.toString() === productId);
+          if (item && item.feedback_permitted === 1) {
+            const existingReview = await Review.findOne({ user_id: decoded.id, product_id: productId });
+            if (!existingReview) {
+              isEligibleToReview = true;
+            }
           }
         }
       } catch (err) {
-        // Invalid token, ignore
+        // ignore
       }
     }
 
     const formattedProduct = {
-      ...product,
-      colors: JSON.parse(product.colors),
-      sizes: JSON.parse(product.sizes),
-      upholstery_types: product.upholstery_types ? JSON.parse(product.upholstery_types) : ['Cloth', 'Rexine'],
-      set_types: product.set_types ? JSON.parse(product.set_types) : [],
-      additional_images: product.additional_images ? JSON.parse(product.additional_images) : [],
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      description: product.description,
+      material: product.material,
+      price: product.price,
+      discount_price: product.discount_price,
+      stock: product.stock,
+      image_url: product.image_url,
+      colors: safeParseArray(product.colors),
+      sizes: safeParseArray(product.sizes),
+      additional_images: safeParseArray(product.additional_images),
+      upholstery_types: safeParseArray(product.upholstery_types, ['Cloth', 'Rexine']),
+      set_types: safeParseArray(product.set_types),
+      seller_id: product.seller_id,
+      rating: avg,
+      review_count: count,
       reviewsList: reviews.map(r => ({
-        ...r,
-        real_images: r.real_images ? JSON.parse(r.real_images) : []
+        id: r.id,
+        user_id: r.user_id,
+        product_id: r.product_id,
+        user_name: r.user_name,
+        rating: r.rating,
+        comment: r.comment,
+        created_at: r.created_at,
+        real_images: safeParseArray(r.real_images)
       })),
       isEligibleToReview
     };
@@ -577,59 +771,61 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// Submit Product Review
+// Submit review
 app.post('/api/products/:id/reviews', authenticateToken, async (req, res) => {
   const productId = req.params.id;
-  const { rating, comment } = req.body;
+  const { rating, comment, real_images } = req.body;
 
   if (!rating || !comment) {
     return res.status(400).json({ message: 'Rating and comment are required' });
   }
 
   try {
-    // Enforce "review after delivery" and permission strictly for all users
-    const deliveredItem = await dbGet(`
-      SELECT oi.id, oi.feedback_permitted FROM orders o
-      JOIN order_items oi ON o.id = oi.order_id
-      WHERE o.user_id = ? AND oi.product_id = ? AND o.status = 'Delivered'
-      LIMIT 1
-    `, [req.user.id, productId]);
+    const deliveredOrder = await Order.findOne({
+      user_id: req.user.id,
+      status: 'Delivered',
+      "items.product_id": productId
+    });
 
-    if (!deliveredItem) {
+    if (!deliveredOrder) {
       return res.status(403).json({ 
         message: 'You can only write a review for products that you have purchased and that have been successfully delivered to you.' 
       });
     }
 
-    if (deliveredItem.feedback_permitted !== 1) {
+    const item = deliveredOrder.items.find(i => i.product_id && i.product_id.toString() === productId);
+    if (!item || item.feedback_permitted !== 1) {
       return res.status(403).json({ 
         message: 'You do not have permission to leave feedback yet. Please wait for the showroom seller or admin to approve feedback permission.' 
       });
     }
 
-    const existingReview = await dbGet(`
-      SELECT id FROM reviews WHERE user_id = ? AND product_id = ? LIMIT 1
-    `, [req.user.id, productId]);
-
+    const existingReview = await Review.findOne({ user_id: req.user.id, product_id: productId });
     if (existingReview) {
       return res.status(400).json({ 
         message: 'You have already submitted a review for this product. Only one review is allowed.' 
       });
     }
 
-    const { real_images } = req.body;
+    await Review.create({
+      user_id: req.user.id,
+      product_id: productId,
+      user_name: req.user.name || 'Anonymous',
+      rating,
+      comment,
+      real_images: real_images || []
+    });
 
-    // Add review
-    await dbRun(
-      'INSERT INTO reviews (user_id, product_id, user_name, rating, comment, real_images) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.user.id, productId, req.user.name || 'Anonymous', rating, comment, JSON.stringify(real_images || [])]
-    );
-
-    // Fetch updated reviews
-    const reviews = await dbAll('SELECT * FROM reviews WHERE product_id = ? ORDER BY created_at DESC', [productId]);
+    const reviews = await Review.find({ product_id: productId }).sort({ created_at: -1 });
     res.status(201).json(reviews.map(r => ({
-      ...r,
-      real_images: r.real_images ? JSON.parse(r.real_images) : []
+      id: r.id,
+      user_id: r.user_id,
+      product_id: r.product_id,
+      user_name: r.user_name,
+      rating: r.rating,
+      comment: r.comment,
+      created_at: r.created_at,
+      real_images: safeParseArray(r.real_images)
     })));
   } catch (error) {
     console.error('Submit review error:', error);
@@ -637,176 +833,7 @@ app.post('/api/products/:id/reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// Fetch Login History (Admin Only)
-app.get('/api/admin/login-history', authenticateToken, authorizeAdmin, async (req, res) => {
-  try {
-    const logs = await dbAll('SELECT * FROM login_history ORDER BY created_at DESC LIMIT 250');
-    res.json(logs);
-  } catch (err) {
-    console.error('Error fetching login history:', err.message);
-    res.status(500).json({ message: 'Failed to retrieve login logs' });
-  }
-});
-
-// Middleware: Authorize Admin or Seller
-const authorizeAdminOrSeller = (req, res, next) => {
-  if (req.user && (req.user.role === 'admin' || req.user.role === 'seller')) {
-    next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Privileged role required.' });
-  }
-};
-
-// 1. Apply to become a Seller (Customer option)
-app.post('/api/auth/apply-seller', authenticateToken, async (req, res) => {
-  const { shop_name, shop_address } = req.body;
-  if (!shop_name || !shop_address) {
-    return res.status(400).json({ message: 'Shop name and Shop address are required' });
-  }
-  try {
-    await dbRun(
-      "UPDATE users SET shop_name = ?, shop_address = ?, seller_status = 'pending' WHERE id = ?",
-      [shop_name, shop_address, req.user.id]
-    );
-    res.json({ message: 'Seller application submitted successfully! Pending admin approval.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to submit seller application' });
-  }
-});
-
-// 2. Get Seller Applications and Current Sellers (Admin Only)
-app.get('/api/admin/sellers', authenticateToken, authorizeAdmin, async (req, res) => {
-  try {
-    const sellers = await dbAll(
-      "SELECT id, name, email, mobile, role, shop_name, shop_address, seller_status FROM users WHERE seller_status = 'pending' OR role = 'seller'"
-    );
-    res.json(sellers);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to retrieve seller accounts' });
-  }
-});
-
-// 3. Approve/Reject Seller application (Admin Only)
-app.post('/api/admin/approve-seller/:id', authenticateToken, authorizeAdmin, async (req, res) => {
-  const userId = req.params.id;
-  const { action } = req.body; // 'approve' or 'reject'
-  if (!action || (action !== 'approve' && action !== 'reject')) {
-    return res.status(400).json({ message: "Action must be 'approve' or 'reject'" });
-  }
-  try {
-    if (action === 'approve') {
-      await dbRun(
-        "UPDATE users SET role = 'seller', seller_status = 'approved' WHERE id = ?",
-        [userId]
-      );
-      res.json({ message: 'User approved as a seller successfully!' });
-    } else {
-      await dbRun(
-        "UPDATE users SET role = 'customer', seller_status = 'none', shop_name = NULL, shop_address = NULL WHERE id = ?",
-        [userId]
-      );
-      res.json({ message: 'Seller application rejected/revoked successfully.' });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to update seller role status' });
-  }
-});
-
-// 4. Retrieve Seller-owned Products (Seller or Admin)
-app.get('/api/seller/products', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
-  try {
-    const sellerId = req.user.role === 'admin' ? (req.query.sellerId || null) : req.user.id;
-    let query = 'SELECT * FROM products';
-    const params = [];
-    if (sellerId !== null) {
-      query += ' WHERE seller_id = ?';
-      params.push(sellerId);
-    } else if (req.user.role === 'admin' && !req.query.sellerId) {
-      query += ' WHERE seller_id IS NULL'; // products direct from admin store
-    }
-    const products = await dbAll(query, params);
-    const formatted = products.map(prod => ({
-      ...prod,
-      colors: JSON.parse(prod.colors),
-      sizes: JSON.parse(prod.sizes),
-      upholstery_types: prod.upholstery_types ? JSON.parse(prod.upholstery_types) : ['Cloth', 'Rexine'],
-      set_types: prod.set_types ? JSON.parse(prod.set_types) : [],
-      additional_images: prod.additional_images ? JSON.parse(prod.additional_images) : []
-    }));
-    res.json(formatted);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to retrieve seller products' });
-  }
-});
-
-// Retrieve customer reviews for products belonging to this seller/admin
-app.get('/api/seller/reviews', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
-  try {
-    let reviews;
-    if (req.user.role === 'admin') {
-      reviews = await dbAll(`
-        SELECT r.*, p.name as product_name, p.image_url as product_image
-        FROM reviews r
-        JOIN products p ON r.product_id = p.id
-        ORDER BY r.created_at DESC
-      `);
-    } else {
-      reviews = await dbAll(`
-        SELECT r.*, p.name as product_name, p.image_url as product_image
-        FROM reviews r
-        JOIN products p ON r.product_id = p.id
-        WHERE p.seller_id = ?
-        ORDER BY r.created_at DESC
-      `, [req.user.id]);
-    }
-    res.json(reviews.map(r => ({
-      ...r,
-      real_images: r.real_images ? JSON.parse(r.real_images) : []
-    })));
-  } catch (error) {
-    console.error('Error fetching seller reviews:', error);
-    res.status(500).json({ message: 'Error fetching customer reviews' });
-  }
-});
-
-// 5. Retrieve Order items and Customer details for products belonging to this seller (Seller Only)
-app.get('/api/seller/orders', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
-  try {
-    const sellerId = req.user.id;
-    let items;
-    if (req.user.role === 'admin') {
-      items = await dbAll(`
-        SELECT oi.*, o.customer_received, o.delivery_response, o.paid_amount, o.payment_bill_img, o.name as customer_name, o.mobile as customer_mobile, o.email as customer_email, 
-               o.address as customer_address, o.city as customer_city, o.state as customer_state, 
-               o.pincode as customer_pincode, o.status as order_status, o.payment_method, o.created_at
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.id
-        ORDER BY o.created_at DESC
-      `);
-    } else {
-      items = await dbAll(`
-        SELECT oi.*, o.customer_received, o.delivery_response, o.paid_amount, o.payment_bill_img, o.name as customer_name, o.mobile as customer_mobile, o.email as customer_email, 
-               o.address as customer_address, o.city as customer_city, o.state as customer_state, 
-               o.pincode as customer_pincode, o.status as order_status, o.payment_method, o.created_at
-        FROM order_items oi
-        JOIN orders o ON oi.order_id = o.id
-        JOIN products p ON oi.product_id = p.id
-        WHERE p.seller_id = ?
-        ORDER BY o.created_at DESC
-      `, [sellerId]);
-    }
-    res.json(items);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to retrieve seller orders' });
-  }
-});
-
-// Add Product (Admin & Seller)
+// Add product (Admin/Seller)
 app.post('/api/products', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const { name, category, description, material, price, discount_price, stock, colors, sizes, upholstery_types, set_types, image_url, additional_images } = req.body;
 
@@ -816,43 +843,31 @@ app.post('/api/products', authenticateToken, authorizeAdminOrSeller, async (req,
 
   try {
     const sellerId = req.user.role === 'seller' ? req.user.id : null;
-    const result = await dbRun(
-      `INSERT INTO products (name, category, description, material, price, discount_price, stock, colors, sizes, upholstery_types, set_types, image_url, additional_images, seller_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        name,
-        category,
-        description,
-        material,
-        price,
-        discount_price || null,
-        stock,
-        JSON.stringify(colors),
-        JSON.stringify(sizes),
-        JSON.stringify(upholstery_types || ['Cloth', 'Rexine']),
-        JSON.stringify(set_types || []),
-        image_url,
-        additional_images ? JSON.stringify(additional_images) : '[]',
-        sellerId
-      ]
-    );
-
-    const newProduct = await dbGet('SELECT * FROM products WHERE id = ?', [result.lastID]);
-    res.status(201).json({
-      ...newProduct,
-      colors: JSON.parse(newProduct.colors),
-      sizes: JSON.parse(newProduct.sizes),
-      upholstery_types: JSON.parse(newProduct.upholstery_types || '["Cloth", "Rexine"]'),
-      set_types: JSON.parse(newProduct.set_types || '[]'),
-      additional_images: JSON.parse(newProduct.additional_images)
+    const newProduct = await Product.create({
+      name,
+      category,
+      description,
+      material,
+      price,
+      discount_price: discount_price || null,
+      stock,
+      colors,
+      sizes,
+      upholstery_types: upholstery_types || ['Cloth', 'Rexine'],
+      set_types: set_types || [],
+      image_url,
+      additional_images: additional_images || [],
+      seller_id: sellerId
     });
+
+    res.status(201).json(newProduct);
   } catch (error) {
     console.error('Add product error:', error);
     res.status(500).json({ message: 'Error creating product' });
   }
 });
 
-// Bulk discount update (Admin & Seller)
+// Bulk discount (Admin/Seller)
 app.put('/api/products/bulk/discount', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const { percentage } = req.body;
   if (percentage === undefined || isNaN(percentage) || percentage < 0 || percentage > 100) {
@@ -861,30 +876,19 @@ app.put('/api/products/bulk/discount', authenticateToken, authorizeAdminOrSeller
 
   try {
     const sellerId = req.user.role === 'admin' ? null : req.user.id;
-    let query, params;
+    const filter = sellerId ? { seller_id: sellerId } : {};
 
     if (percentage === 0) {
-      // Clear all discounts
-      if (sellerId) {
-        query = 'UPDATE products SET discount_price = NULL WHERE seller_id = ?';
-        params = [sellerId];
-      } else {
-        query = 'UPDATE products SET discount_price = NULL';
-        params = [];
-      }
+      await Product.updateMany(filter, { discount_price: null });
     } else {
-      // Apply percentage discount
       const factor = (100 - percentage) / 100;
-      if (sellerId) {
-        query = 'UPDATE products SET discount_price = ROUND(price * ?) WHERE seller_id = ?';
-        params = [factor, sellerId];
-      } else {
-        query = 'UPDATE products SET discount_price = ROUND(price * ?)';
-        params = [factor];
-      }
+      const products = await Product.find(filter);
+      await Promise.all(products.map(p => {
+        p.discount_price = Math.round(p.price * factor);
+        return p.save();
+      }));
     }
 
-    await dbRun(query, params);
     res.json({ message: `Successfully updated discount of ${percentage === 0 ? 'none' : percentage + '%'} to all products!` });
   } catch (err) {
     console.error('Bulk discount error:', err);
@@ -892,73 +896,63 @@ app.put('/api/products/bulk/discount', authenticateToken, authorizeAdminOrSeller
   }
 });
 
-// Edit Product (Admin & Seller)
+// Edit product (Admin/Seller)
 app.put('/api/products/:id', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const productId = req.params.id;
   const { name, category, description, material, price, discount_price, stock, colors, sizes, upholstery_types, set_types, image_url, additional_images } = req.body;
 
   try {
-    const existing = await dbGet('SELECT * FROM products WHERE id = ?', [productId]);
-    if (!existing) {
+    const product = await Product.findById(productId);
+    if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    if (req.user.role === 'seller' && existing.seller_id !== req.user.id) {
+    if (req.user.role === 'seller' && product.seller_id && product.seller_id.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Access denied. You do not own this product.' });
     }
 
-    await dbRun(
-      `UPDATE products 
-       SET name = ?, category = ?, description = ?, material = ?, price = ?, discount_price = ?, stock = ?, colors = ?, sizes = ?, upholstery_types = ?, set_types = ?, image_url = ?, additional_images = ?
-       WHERE id = ?`,
-      [
+    const updated = await Product.findByIdAndUpdate(
+      productId,
+      {
         name,
         category,
         description,
         material,
         price,
-        discount_price !== undefined ? discount_price : null,
+        discount_price: discount_price !== undefined ? discount_price : null,
         stock,
-        JSON.stringify(colors),
-        JSON.stringify(sizes),
-        JSON.stringify(upholstery_types || ['Cloth', 'Rexine']),
-        JSON.stringify(set_types || []),
+        colors,
+        sizes,
+        upholstery_types: upholstery_types || ['Cloth', 'Rexine'],
+        set_types: set_types || [],
         image_url,
-        additional_images ? JSON.stringify(additional_images) : '[]',
-        productId
-      ]
+        additional_images: additional_images || []
+      },
+      { new: true }
     );
 
-    const updatedProduct = await dbGet('SELECT * FROM products WHERE id = ?', [productId]);
-    res.json({
-      ...updatedProduct,
-      colors: JSON.parse(updatedProduct.colors),
-      sizes: JSON.parse(updatedProduct.sizes),
-      upholstery_types: JSON.parse(updatedProduct.upholstery_types || '["Cloth", "Rexine"]'),
-      set_types: JSON.parse(updatedProduct.set_types || '[]'),
-      additional_images: JSON.parse(updatedProduct.additional_images)
-    });
+    res.json(updated);
   } catch (error) {
     console.error('Update product error:', error);
     res.status(500).json({ message: 'Error updating product' });
   }
 });
 
-// Delete Product (Admin & Seller)
+// Delete product (Admin/Seller)
 app.delete('/api/products/:id', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const productId = req.params.id;
 
   try {
-    const product = await dbGet('SELECT * FROM products WHERE id = ?', [productId]);
+    const product = await Product.findById(productId);
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    if (req.user.role === 'seller' && product.seller_id !== req.user.id) {
+    if (req.user.role === 'seller' && product.seller_id && product.seller_id.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Access denied. You do not own this product.' });
     }
 
-    await dbRun('DELETE FROM products WHERE id = ?', [productId]);
+    await Product.findByIdAndDelete(productId);
     res.json({ message: 'Product deleted successfully', id: productId });
   } catch (error) {
     console.error('Delete product error:', error);
@@ -967,48 +961,52 @@ app.delete('/api/products/:id', authenticateToken, authorizeAdminOrSeller, async
 });
 
 // ==========================================
-// 3. WISHLIST ENDPOINTS
+// 4. WISHLIST ENDPOINTS
 // ==========================================
 
 // Get Wishlist
 app.get('/api/wishlist', authenticateToken, async (req, res) => {
   try {
-    const items = await dbAll(
-      `SELECT p.* FROM wishlist w
-       JOIN products p ON w.product_id = p.id
-       WHERE w.user_id = ?`,
-      [req.user.id]
-    );
-
-    const formattedItems = items.map(prod => ({
-      ...prod,
-      colors: JSON.parse(prod.colors),
-      sizes: JSON.parse(prod.sizes),
-      additional_images: prod.additional_images ? JSON.parse(prod.additional_images) : []
-    }));
-
-    res.json(formattedItems);
+    const items = await Wishlist.find({ user_id: req.user.id }).populate('product_id');
+    const validProducts = items
+      .filter(item => item.product_id !== null)
+      .map(item => {
+        const prod = item.product_id;
+        return {
+          id: prod.id,
+          name: prod.name,
+          category: prod.category,
+          description: prod.description,
+          material: prod.material,
+          price: prod.price,
+          discount_price: prod.discount_price,
+          stock: prod.stock,
+          image_url: prod.image_url,
+          colors: safeParseArray(prod.colors),
+          sizes: safeParseArray(prod.sizes),
+          additional_images: safeParseArray(prod.additional_images)
+        };
+      });
+    res.json(validProducts);
   } catch (error) {
     res.status(500).json({ message: 'Error retrieving wishlist' });
   }
 });
 
-// Toggle Wishlist (Add/Remove)
+// Toggle Wishlist
 app.post('/api/wishlist', authenticateToken, async (req, res) => {
   const { productId } = req.body;
-
   if (!productId) {
     return res.status(400).json({ message: 'Product ID is required' });
   }
 
   try {
-    const existing = await dbGet('SELECT * FROM wishlist WHERE user_id = ? AND product_id = ?', [req.user.id, productId]);
-
+    const existing = await Wishlist.findOne({ user_id: req.user.id, product_id: productId });
     if (existing) {
-      await dbRun('DELETE FROM wishlist WHERE user_id = ? AND product_id = ?', [req.user.id, productId]);
+      await Wishlist.deleteOne({ _id: existing._id });
       res.json({ added: false, message: 'Removed from wishlist' });
     } else {
-      await dbRun('INSERT INTO wishlist (user_id, product_id) VALUES (?, ?)', [req.user.id, productId]);
+      await Wishlist.create({ user_id: req.user.id, product_id: productId });
       res.json({ added: true, message: 'Added to wishlist' });
     }
   } catch (error) {
@@ -1017,7 +1015,7 @@ app.post('/api/wishlist', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// 4. ORDER ENDPOINTS
+// 5. ORDER ENDPOINTS
 // ==========================================
 
 // Place Order
@@ -1029,9 +1027,9 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   }
 
   try {
-    // 1. Verify and update inventory stock
+    // Check inventory stock
     for (const item of items) {
-      const prod = await dbGet('SELECT stock, name FROM products WHERE id = ?', [item.product_id]);
+      const prod = await Product.findById(item.product_id);
       if (!prod) {
         return res.status(400).json({ message: `Product "${item.product_name}" is no longer available` });
       }
@@ -1040,32 +1038,45 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    // 2. Insert into orders table
-    const orderResult = await dbRun(
-      `INSERT INTO orders (user_id, name, mobile, email, address, city, state, pincode, total_price, payment_method, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
-      [req.user.id, name, mobile, email, address, city, state, pincode, total_price, payment_method]
-    );
-
-    const orderId = orderResult.lastID;
-
-    // 3. Insert order items and deduct stock
+    // Deduct stock
     for (const item of items) {
-      await dbRun(
-        `INSERT INTO order_items (order_id, product_id, product_name, quantity, price, color, size, image_url, upholstery)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [orderId, item.product_id, item.product_name, item.quantity, item.price, item.color, item.size, item.image_url, item.upholstery || 'None']
-      );
-
-      // Deduct stock
-      await dbRun('UPDATE products SET stock = stock - ? WHERE id = ?', [item.quantity, item.product_id]);
+      await Product.findByIdAndUpdate(item.product_id, { $inc: { stock: -item.quantity } });
     }
+
+    // Create Order
+    const dbItems = items.map(item => ({
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      price: item.price,
+      color: item.color,
+      size: item.size,
+      image_url: item.image_url,
+      upholstery: item.upholstery || 'None',
+      set_type: item.set_type || 'None',
+      feedback_permitted: 0
+    }));
+
+    const order = await Order.create({
+      user_id: req.user.id,
+      name,
+      mobile,
+      email,
+      address,
+      city,
+      state,
+      pincode,
+      total_price,
+      payment_method,
+      items: dbItems,
+      status: 'Pending'
+    });
 
     res.status(201).json({
       message: 'Order Placed Successfully!',
-      orderId: orderId,
+      orderId: order.id,
       orderSummary: {
-        id: orderId,
+        id: order.id,
         name,
         email,
         mobile,
@@ -1082,54 +1093,74 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   }
 });
 
-// Get User's Orders
+// Get My Orders
 app.get('/api/orders/my-orders', authenticateToken, async (req, res) => {
   try {
-    const orders = await dbAll('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC', [req.user.id]);
-
-    const result = [];
-    for (const order of orders) {
-      const rawItems = await dbAll('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
-      const items = [];
-      for (const item of rawItems) {
-        const existingReview = await dbGet(
-          'SELECT id FROM reviews WHERE user_id = ? AND product_id = ?',
-          [req.user.id, item.product_id]
-        );
-        items.push({
-          ...item,
-          already_reviewed: existingReview ? 1 : 0
+    const orders = await Order.find({ user_id: req.user.id }).sort({ created_at: -1 });
+    
+    const formattedOrders = await Promise.all(orders.map(async (order) => {
+      const items = await Promise.all(order.items.map(async (item) => {
+        const existingReview = await Review.findOne({ 
+          user_id: req.user.id, 
+          product_id: item.product_id 
         });
-      }
-      result.push({
-        ...order,
-        items
-      });
-    }
+        return {
+          id: item.id,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          price: item.price,
+          color: item.color,
+          size: item.size,
+          image_url: item.image_url,
+          upholstery: item.upholstery,
+          set_type: item.set_type,
+          feedback_permitted: item.feedback_permitted,
+          already_reviewed: existingReview ? 1 : 0
+        };
+      }));
 
-    res.json(result);
+      return {
+        id: order.id,
+        user_id: order.user_id,
+        name: order.name,
+        mobile: order.mobile,
+        email: order.email,
+        address: order.address,
+        city: order.city,
+        state: order.state,
+        pincode: order.pincode,
+        total_price: order.total_price,
+        status: order.status,
+        payment_method: order.payment_method,
+        customer_received: order.customer_received,
+        delivery_response: order.delivery_response,
+        paid_amount: order.paid_amount,
+        payment_bill_img: order.payment_bill_img,
+        created_at: order.created_at,
+        items
+      };
+    }));
+
+    res.json(formattedOrders);
   } catch (error) {
     console.error('My orders error:', error);
     res.status(500).json({ message: 'Error fetching order history' });
   }
 });
 
-// Track Specific Order
+// Track specific order
 app.get('/api/orders/track/:id', async (req, res) => {
   const orderId = req.params.id;
-
   try {
-    const order = await dbGet('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: 'Invalid Order ID format' });
+    }
+    const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
-
-    const items = await dbAll('SELECT * FROM order_items WHERE order_id = ?', [orderId]);
-
-    res.json({
-      ...order,
-      items
-    });
+    res.json(order);
   } catch (error) {
     console.error('Track order error:', error);
     res.status(500).json({ message: 'Error retrieving order tracking' });
@@ -1139,18 +1170,8 @@ app.get('/api/orders/track/:id', async (req, res) => {
 // Get All Orders (Admin Only)
 app.get('/api/orders', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
-    const orders = await dbAll('SELECT * FROM orders ORDER BY created_at DESC');
-
-    const result = [];
-    for (const order of orders) {
-      const items = await dbAll('SELECT * FROM order_items WHERE order_id = ?', [order.id]);
-      result.push({
-        ...order,
-        items
-      });
-    }
-
-    res.json(result);
+    const orders = await Order.find().sort({ created_at: -1 });
+    res.json(orders);
   } catch (error) {
     console.error('Admin view orders error:', error);
     res.status(500).json({ message: 'Error fetching customer orders' });
@@ -1170,7 +1191,10 @@ app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
   }
 
   try {
-    const order = await dbGet('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: 'Invalid Order ID format' });
+    }
+    const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
@@ -1179,23 +1203,17 @@ app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
       return res.status(403).json({ message: 'Only admins or sellers can update order status' });
     }
 
-    // For seller, check if the order contains their products
     if (userRole === 'seller') {
-      const items = await dbAll('SELECT * FROM order_items WHERE order_id = ?', [orderId]);
-      let ownsItem = false;
-      for (const item of items) {
-        const product = await dbGet('SELECT * FROM products WHERE id = ?', [item.product_id]);
-        if (product && product.seller_id === userId) {
-          ownsItem = true;
-          break;
-        }
-      }
+      const sellerProducts = await Product.find({ seller_id: userId });
+      const productIds = sellerProducts.map(p => p._id.toString());
+      const ownsItem = order.items.some(item => item.product_id && productIds.includes(item.product_id.toString()));
       if (!ownsItem) {
         return res.status(403).json({ message: 'You can only update status of orders containing your products' });
       }
     }
 
-    await dbRun('UPDATE orders SET status = ? WHERE id = ?', [status, orderId]);
+    order.status = status;
+    await order.save();
     res.json({ message: 'Order status updated successfully', orderId, status });
   } catch (error) {
     console.error('Update order status error:', error);
@@ -1210,24 +1228,25 @@ app.put('/api/orders/:id/delivered-by-customer', authenticateToken, async (req, 
   const { delivery_response, paid_amount, payment_bill_img } = req.body;
 
   try {
-    const order = await dbGet('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: 'Invalid Order ID format' });
+    }
+    const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    if (order.user_id !== userId && req.user.role !== 'admin') {
+    if (order.user_id && order.user_id.toString() !== userId && req.user.role !== 'admin') {
       return res.status(403).json({ message: 'You can only confirm delivery for your own orders' });
     }
 
-    await dbRun(`
-      UPDATE orders 
-      SET status = 'Delivered', 
-          customer_received = 1,
-          delivery_response = ?,
-          paid_amount = ?,
-          payment_bill_img = ?
-      WHERE id = ?
-    `, [delivery_response || 'Received Safely', paid_amount || 0, payment_bill_img || null, orderId]);
+    order.status = 'Delivered';
+    order.customer_received = 1;
+    order.delivery_response = delivery_response || 'Received Safely';
+    order.paid_amount = paid_amount || 0;
+    order.payment_bill_img = payment_bill_img || null;
+    
+    await order.save();
 
     res.json({ message: 'Order marked as Delivered! Confirmation details sent to showroom.' });
   } catch (error) {
@@ -1236,26 +1255,28 @@ app.put('/api/orders/:id/delivered-by-customer', authenticateToken, async (req, 
   }
 });
 
-// Grant/revoke feedback permission for a specific order item (Admin/Seller only)
+// Grant feedback permission
 app.put('/api/orders/items/:itemId/feedback-permission', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const itemId = req.params.itemId;
   const { permitted } = req.body;
 
   try {
-    const item = await dbGet('SELECT * FROM order_items WHERE id = ?', [itemId]);
-    if (!item) {
+    const order = await Order.findOne({ "items._id": itemId });
+    if (!order) {
       return res.status(404).json({ message: 'Order item not found' });
     }
 
-    // For seller, verify ownership of product
+    const item = order.items.id(itemId);
     if (req.user.role === 'seller') {
-      const product = await dbGet('SELECT * FROM products WHERE id = ?', [item.product_id]);
-      if (!product || product.seller_id !== req.user.id) {
+      const product = await Product.findById(item.product_id);
+      if (!product || (product.seller_id && product.seller_id.toString() !== req.user.id)) {
         return res.status(403).json({ message: 'You can only manage permissions for your own products' });
       }
     }
 
-    await dbRun("UPDATE order_items SET feedback_permitted = ? WHERE id = ?", [permitted ? 1 : 0, itemId]);
+    item.feedback_permitted = permitted ? 1 : 0;
+    await order.save();
+
     res.json({ message: `Feedback permission ${permitted ? 'granted' : 'revoked'} successfully!`, itemId, permitted });
   } catch (error) {
     console.error('Update feedback permission error:', error);
@@ -1263,66 +1284,60 @@ app.put('/api/orders/items/:itemId/feedback-permission', authenticateToken, auth
   }
 });
 
-// Cancel/Reject Order Endpoint (Admins, Sellers, and Customers with 24h limit)
+// Cancel Order
 app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
   const orderId = req.params.id;
   const userId = req.user.id;
   const userRole = req.user.role;
 
   try {
-    const order = await dbGet('SELECT * FROM orders WHERE id = ?', [orderId]);
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ message: 'Invalid Order ID format' });
+    }
+    const order = await Order.findById(orderId);
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    // If customer, check ownership and 24-hour limit
     if (userRole === 'customer') {
-      if (order.user_id !== userId) {
+      if (order.user_id && order.user_id.toString() !== userId) {
         return res.status(403).json({ message: 'You can only cancel your own orders' });
       }
 
-      // Check if already shipped or delivered
       if (['Shipped', 'Delivered', 'Cancelled', 'Rejected'].includes(order.status)) {
         return res.status(400).json({ message: `Cannot cancel order that is already ${order.status.toLowerCase()}` });
       }
 
-      // Check 24 hour limit (SQLite CURRENT_TIMESTAMP is in UTC)
-      const orderTime = new Date(order.created_at + ' UTC');
+      const orderTime = new Date(order.created_at);
       const now = new Date();
-      const diffMs = now.getTime() - orderTime.getTime();
-      const diffHours = diffMs / (1000 * 60 * 60);
+      const diffHours = (now.getTime() - orderTime.getTime()) / (1000 * 60 * 60);
 
       if (diffHours > 24) {
         return res.status(400).json({ message: 'Order cannot be cancelled after 24 hours from purchase time' });
       }
 
-      await dbRun('UPDATE orders SET status = ? WHERE id = ?', ['Cancelled', orderId]);
+      order.status = 'Cancelled';
+      await order.save();
       return res.json({ message: 'Order cancelled successfully', status: 'Cancelled' });
     }
 
-    // If admin or seller
     if (userRole === 'admin' || userRole === 'seller') {
       if (userRole === 'seller') {
-        const items = await dbAll('SELECT * FROM order_items WHERE order_id = ?', [orderId]);
-        let ownsItem = false;
-        for (const item of items) {
-          const product = await dbGet('SELECT * FROM products WHERE id = ?', [item.product_id]);
-          if (product && product.seller_id === userId) {
-            ownsItem = true;
-            break;
-          }
-        }
+        const sellerProducts = await Product.find({ seller_id: userId });
+        const productIds = sellerProducts.map(p => p._id.toString());
+        const ownsItem = order.items.some(item => item.product_id && productIds.includes(item.product_id.toString()));
         if (!ownsItem) {
           return res.status(403).json({ message: 'You can only reject/cancel orders containing your products' });
         }
       }
 
-      const nextStatus = req.body.status || 'Cancelled'; // 'Cancelled' or 'Rejected'
+      const nextStatus = req.body.status || 'Cancelled';
       if (!['Cancelled', 'Rejected'].includes(nextStatus)) {
         return res.status(400).json({ message: 'Invalid status for cancellation/rejection' });
       }
 
-      await dbRun('UPDATE orders SET status = ? WHERE id = ?', [nextStatus, orderId]);
+      order.status = nextStatus;
+      await order.save();
       return res.json({ message: `Order status shifted to ${nextStatus.toLowerCase()} successfully`, status: nextStatus });
     }
 
@@ -1334,50 +1349,87 @@ app.put('/api/orders/:id/cancel', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// 5. ADMIN STATISTICS ENDPOINT (Admin Only)
+// 6. ADMIN/SELLER OPERATIONS ENDPOINTS
 // ==========================================
+
+// Fetch login history (Admin Only)
+app.get('/api/admin/login-history', authenticateToken, authorizeAdmin, async (req, res) => {
+  try {
+    const logs = await LoginHistory.find().sort({ created_at: -1 }).limit(250);
+    res.json(logs);
+  } catch (err) {
+    console.error('Error fetching login history:', err.message);
+    res.status(500).json({ message: 'Failed to retrieve login logs' });
+  }
+});
+
+// Admin stats (Admin Only)
 app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) => {
   try {
     // Total Revenue
-    const revenueRow = await dbGet("SELECT SUM(total_price) as total FROM orders WHERE status != 'Cancelled'");
-    const totalRevenue = revenueRow.total || 0;
+    const revenueRow = await Order.aggregate([
+      { $match: { status: { $ne: 'Cancelled' } } },
+      { $group: { _id: null, total: { $sum: '$total_price' } } }
+    ]);
+    const totalRevenue = revenueRow.length > 0 ? revenueRow[0].total : 0;
 
     // Order Counts
-    const orderCounts = await dbAll('SELECT status, COUNT(*) as count FROM orders GROUP BY status');
+    const orderBreakdown = await Order.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+    const ordersBreakdown = orderBreakdown.map(o => ({
+      status: o._id,
+      count: o.count
+    }));
 
     // Total Products
-    const productsRow = await dbGet('SELECT COUNT(*) as count FROM products');
-    const totalProducts = productsRow.count || 0;
+    const productsCount = await Product.countDocuments();
 
-    // Out of Stock / Low Stock products
-    const lowStockRow = await dbGet('SELECT COUNT(*) as count FROM products WHERE stock <= 3');
-    const lowStockCount = lowStockRow.count || 0;
+    // Out of Stock / Low Stock count
+    const lowStockCount = await Product.countDocuments({ stock: { $lte: 3 } });
 
     // Sales by Category
-    const categorySales = await dbAll(`
-      SELECT p.category, SUM(oi.quantity * oi.price) as revenue, SUM(oi.quantity) as volume
-      FROM order_items oi
-      JOIN products p ON oi.product_id = p.id
-      GROUP BY p.category
-    `);
+    // We fetch orders and aggregate order items
+    const orders = await Order.find({ status: { $ne: 'Cancelled' } });
+    const categorySalesMap = {};
+    for (const order of orders) {
+      for (const item of order.items) {
+        if (item.product_id) {
+          const product = await Product.findById(item.product_id);
+          const category = product ? product.category : 'General';
+          if (!categorySalesMap[category]) {
+            categorySalesMap[category] = { revenue: 0, volume: 0 };
+          }
+          categorySalesMap[category].revenue += item.quantity * item.price;
+          categorySalesMap[category].volume += item.quantity;
+        }
+      }
+    }
+    const categorySales = Object.keys(categorySalesMap).map(cat => ({
+      category: cat,
+      revenue: categorySalesMap[cat].revenue,
+      volume: categorySalesMap[cat].volume
+    }));
 
-    // Dynamic list of low stock items
-    const lowStockItems = await dbAll('SELECT id, name, category, stock, price FROM products WHERE stock <= 5 ORDER BY stock ASC');
+    // Low stock items
+    const lowStockItems = await Product.find({ stock: { $lte: 5 } }).sort({ stock: 1 });
 
     // Recent orders
-    const recentOrders = await dbAll(`
-      SELECT o.id, o.name, o.total_price, o.status, o.created_at
-      FROM orders o
-      ORDER BY o.created_at DESC
-      LIMIT 5
-    `);
+    const recentOrdersRaw = await Order.find().sort({ created_at: -1 }).limit(5);
+    const recentOrders = recentOrdersRaw.map(o => ({
+      id: o.id,
+      name: o.name,
+      total_price: o.total_price,
+      status: o.status,
+      created_at: o.created_at
+    }));
 
     res.json({
       stats: {
         revenue: totalRevenue,
-        productsCount: totalProducts,
+        productsCount: productsCount,
         lowStockCount: lowStockCount,
-        ordersBreakdown: orderCounts
+        ordersBreakdown
       },
       categorySales,
       lowStockItems,
@@ -1389,7 +1441,7 @@ app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) 
   }
 });
 
-// Upload direct image endpoint
+// Image upload API
 app.post('/api/upload', (req, res) => {
   const { image } = req.body;
   if (!image) {
@@ -1425,7 +1477,8 @@ app.post('/api/upload', (req, res) => {
         return res.status(500).json({ message: 'Failed to save uploaded image' });
       }
       const host = req.get('host') || `${req.hostname}:${PORT}`;
-      const imageUrl = `http://${host}/uploads/${filename}`;
+      const protocol = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+      const imageUrl = `${protocol}://${host}/uploads/${filename}`;
       res.json({ imageUrl });
     });
   } catch (err) {
@@ -1434,7 +1487,7 @@ app.post('/api/upload', (req, res) => {
   }
 });
 
-// Submit Contact/Inquiry Message (Public)
+// Submit Contact Inquiry
 app.post('/api/inquiries', async (req, res) => {
   const { name, email, mobile, subject, message } = req.body;
   if (!name || !email || !message) {
@@ -1442,10 +1495,13 @@ app.post('/api/inquiries', async (req, res) => {
   }
 
   try {
-    await dbRun(
-      'INSERT INTO inquiries (name, email, mobile, subject, message) VALUES (?, ?, ?, ?, ?)',
-      [name.trim(), email.trim(), mobile ? mobile.trim() : null, subject ? subject.trim() : null, message.trim()]
-    );
+    await Inquiry.create({
+      name: name.trim(),
+      email: email.trim(),
+      mobile: mobile ? mobile.trim() : null,
+      subject: subject ? subject.trim() : null,
+      message: message.trim()
+    });
     res.status(201).json({ message: 'Inquiry submitted successfully!' });
   } catch (err) {
     console.error('Submit inquiry error:', err);
@@ -1453,10 +1509,10 @@ app.post('/api/inquiries', async (req, res) => {
   }
 });
 
-// Retrieve Inquiries List (Admin & Seller)
+// Get Contact Inquiries (Admin/Seller)
 app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   try {
-    const inquiries = await dbAll('SELECT * FROM inquiries ORDER BY created_at DESC');
+    const inquiries = await Inquiry.find().sort({ created_at: -1 });
     res.json(inquiries);
   } catch (err) {
     console.error('Retrieve inquiries error:', err);
@@ -1464,11 +1520,11 @@ app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async
   }
 });
 
-// Delete Inquiry (Admin & Seller)
+// Delete Inquiry (Admin/Seller)
 app.delete('/api/admin/inquiries/:id', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   const { id } = req.params;
   try {
-    await dbRun('DELETE FROM inquiries WHERE id = ?', [id]);
+    await Inquiry.findByIdAndDelete(id);
     res.json({ message: 'Inquiry message deleted successfully' });
   } catch (err) {
     console.error('Delete inquiry error:', err);
@@ -1476,19 +1532,17 @@ app.delete('/api/admin/inquiries/:id', authenticateToken, authorizeAdminOrSeller
   }
 });
 
-// Serve frontend build static files in production
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
-
-// SPA route fallback handler (loads React client side routes)
-app.get(/.*/, (req, res) => {
-  if (!req.path.startsWith('/api')) {
-    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-  }
+// Vercel Serverless routing fallthrough
+app.use((req, res) => {
+  res.status(404).json({ message: `API route not found: ${req.method} ${req.path}` });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Backend server is running on port ${PORT}`);
-});
-
+// Export app for Vercel
 module.exports = app;
+
+// Start Server locally
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Backend server is running locally on port ${PORT}`);
+  });
+}
