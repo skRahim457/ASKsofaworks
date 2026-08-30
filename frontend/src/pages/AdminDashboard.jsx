@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE } from '../config';
 
 export default function AdminDashboard() {
   const { user, token } = useAuth();
@@ -71,7 +72,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setStatsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/stats`, {
+      const res = await fetch(`${API_BASE}/admin/stats`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -89,7 +90,7 @@ export default function AdminDashboard() {
   const fetchProducts = async () => {
     setProductsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products`);
+      const res = await fetch(`${API_BASE}/products`);
       if (res.ok) {
         const data = await res.json();
         setProducts(data);
@@ -106,7 +107,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setOrdersLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders`, {
+      const res = await fetch(`${API_BASE}/orders`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -125,7 +126,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setLogsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/login-history`, {
+      const res = await fetch(`${API_BASE}/admin/login-history`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -144,7 +145,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setSellersLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/sellers`, {
+      const res = await fetch(`${API_BASE}/admin/sellers`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -162,7 +163,7 @@ export default function AdminDashboard() {
   const handleApproveSeller = async (userId, action) => {
     if (!window.confirm(`Are you sure you want to ${action} this seller application?`)) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/approve-seller/${userId}`, {
+      const res = await fetch(`${API_BASE}/admin/approve-seller/${userId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -185,7 +186,7 @@ export default function AdminDashboard() {
 
   const handleToggleFeedbackPermission = async (orderItemId, permittedValue) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/items/${orderItemId}/feedback-permission`, {
+      const res = await fetch(`${API_BASE}/orders/items/${orderItemId}/feedback-permission`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -221,7 +222,7 @@ export default function AdminDashboard() {
   const fetchReviews = async () => {
     setReviewsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/seller/reviews`, {
+      const res = await fetch(`${API_BASE}/seller/reviews`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -241,7 +242,7 @@ export default function AdminDashboard() {
     if (!token) return;
     setInquiriesLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/inquiries`, {
+      const res = await fetch(`${API_BASE}/admin/inquiries`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -258,7 +259,7 @@ export default function AdminDashboard() {
   const handleDeleteInquiry = async (id) => {
     if (!window.confirm('Are you sure you want to delete this inquiry message?')) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/admin/inquiries/${id}`, {
+      const res = await fetch(`${API_BASE}/admin/inquiries/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -338,7 +339,7 @@ export default function AdminDashboard() {
   const handleDeleteProduct = async (id) => {
     if (!window.confirm('Are you sure you want to delete this product? This action is permanent.')) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products/${id}`, {
+      const res = await fetch(`${API_BASE}/products/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -364,7 +365,7 @@ export default function AdminDashboard() {
     }
     
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products/bulk/discount`, {
+      const res = await fetch(`${API_BASE}/products/bulk/discount`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -412,8 +413,8 @@ export default function AdminDashboard() {
 
     const isEdit = !!editingProduct;
     const url = isEdit 
-      ? `http://${window.location.hostname}:5000/api/products/${editingProduct.id}` 
-      : `http://${window.location.hostname}:5000/api/products`;
+      ? `${API_BASE}/products/${editingProduct.id}` 
+      : `${API_BASE}/products`;
     const method = isEdit ? 'PUT' : 'POST';
 
     try {
@@ -456,7 +457,7 @@ export default function AdminDashboard() {
       reader.onloadend = async () => {
         const base64Data = reader.result;
         try {
-          const res = await fetch(`http://${window.location.hostname}:5000/api/upload`, {
+          const res = await fetch(`${API_BASE}/upload`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -486,7 +487,7 @@ export default function AdminDashboard() {
   // Update Order Status Handler
   const handleUpdateOrderStatus = async (orderId, nextStatus) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/${orderId}/status`, {
+      const res = await fetch(`${API_BASE}/orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

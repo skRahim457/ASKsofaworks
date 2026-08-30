@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useWishlist } from '../context/WishlistContext';
+import { API_BASE } from '../config';
 
 export default function Home() {
   const { toggleWishlist, isInWishlist } = useWishlist();
@@ -16,7 +17,7 @@ export default function Home() {
   const bedTrackRef = useRef(null);
 
   useEffect(() => {
-    fetch(`http://${window.location.hostname}:5000/api/products`)
+    fetch(`${API_BASE}/products`)
       .then((res) => res.json())
       .then((data) => {
         // Suggested: Mix of items

@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useWishlist } from '../context/WishlistContext';
+import { API_BASE } from '../config';
 
 export default function ProductDetails() {
   const { id } = useParams();
@@ -38,7 +39,7 @@ export default function ProductDetails() {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products/${id}`, { headers });
+      const res = await fetch(`${API_BASE}/products/${id}`, { headers });
       if (!res.ok) throw new Error('Product not found');
       const data = await res.json();
       
@@ -56,7 +57,7 @@ export default function ProductDetails() {
       }
       
       // Fetch related products
-      const relRes = await fetch(`http://${window.location.hostname}:5000/api/products?category=${data.category}`);
+      const relRes = await fetch(`${API_BASE}/products?category=${data.category}`);
       const relData = await relRes.json();
       // Filter out current product
       setRelatedProducts(relData.filter(p => p.id !== data.id).slice(0, 3));
@@ -109,7 +110,7 @@ export default function ProductDetails() {
     }
 
     try {
-      const response = await fetch(`http://${window.location.hostname}:5000/api/products/${id}/reviews`, {
+      const response = await fetch(`${API_BASE}/products/${id}/reviews`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
+import { API_BASE } from '../config';
 
 export default function Checkout() {
   const { user, token } = useAuth();
@@ -154,7 +155,7 @@ export default function Checkout() {
 
     setLoading(true);
     try {
-      const response = await fetch(`http://${window.location.hostname}:5000/api/orders`, {
+      const response = await fetch(`${API_BASE}/orders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

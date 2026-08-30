@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useWishlist } from '../context/WishlistContext';
 import { useCart } from '../context/CartContext';
+import { API_BASE } from '../config';
 
 export default function Account() {
   const { user, token, logout, updateProfile } = useAuth();
@@ -65,7 +66,7 @@ export default function Account() {
   const loadOrders = () => {
     if (!token) return;
     setOrdersLoading(true);
-    fetch(`http://${window.location.hostname}:5000/api/orders/my-orders`, {
+    fetch(`${API_BASE}/orders/my-orders`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -91,7 +92,7 @@ export default function Account() {
   const handleCancelCustomerOrder = async (orderId) => {
     if (!window.confirm('Are you sure you want to cancel this order?')) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/${orderId}/cancel`, {
+      const res = await fetch(`${API_BASE}/orders/${orderId}/cancel`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +114,7 @@ export default function Account() {
 
   const handleQuickReceivedConfirm = async (orderId) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/${orderId}/delivered-by-customer`, {
+      const res = await fetch(`${API_BASE}/orders/${orderId}/delivered-by-customer`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -144,7 +145,7 @@ export default function Account() {
     reader.onloadend = async () => {
       const base64 = reader.result;
       try {
-        const res = await fetch(`http://${window.location.hostname}:5000/api/orders/${orderId}/delivered-by-customer`, {
+        const res = await fetch(`${API_BASE}/orders/${orderId}/delivered-by-customer`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -181,7 +182,7 @@ export default function Account() {
     }
 
     try {
-      const response = await fetch(`http://${window.location.hostname}:5000/api/products/${productId}/reviews`, {
+      const response = await fetch(`${API_BASE}/products/${productId}/reviews`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -321,7 +322,7 @@ export default function Account() {
     }
     setSellerLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/auth/apply-seller`, {
+      const res = await fetch(`${API_BASE}/auth/apply-seller`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

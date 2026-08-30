@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE } from '../config';
 
 export default function ContactUs() {
   const [name, setName] = useState('');
@@ -23,7 +24,7 @@ export default function ContactUs() {
 
     setLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/inquiries`, {
+      const res = await fetch(`${API_BASE}/inquiries`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

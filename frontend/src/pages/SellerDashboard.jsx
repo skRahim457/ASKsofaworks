@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { API_BASE } from '../config';
 
 export default function SellerDashboard() {
   const { user, token } = useAuth();
@@ -61,7 +62,7 @@ export default function SellerDashboard() {
   const fetchProducts = async () => {
     setProductsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/seller/products`, {
+      const res = await fetch(`${API_BASE}/seller/products`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -79,7 +80,7 @@ export default function SellerDashboard() {
   const fetchOrders = async () => {
     setOrdersLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/seller/orders`, {
+      const res = await fetch(`${API_BASE}/seller/orders`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -96,7 +97,7 @@ export default function SellerDashboard() {
   const fetchReviews = async () => {
     setReviewsLoading(true);
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/seller/reviews`, {
+      const res = await fetch(`${API_BASE}/seller/reviews`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -173,7 +174,7 @@ export default function SellerDashboard() {
   const handleDeleteProduct = async (id) => {
     if (!window.confirm('Are you sure you want to delete this furniture product design?')) return;
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products/${id}`, {
+      const res = await fetch(`${API_BASE}/products/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -198,7 +199,7 @@ export default function SellerDashboard() {
     }
     
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/products/bulk/discount`, {
+      const res = await fetch(`${API_BASE}/products/bulk/discount`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -240,8 +241,8 @@ export default function SellerDashboard() {
 
     const isEdit = !!editingProduct;
     const url = isEdit 
-      ? `http://${window.location.hostname}:5000/api/products/${editingProduct.id}` 
-      : `http://${window.location.hostname}:5000/api/products`;
+      ? `${API_BASE}/products/${editingProduct.id}` 
+      : `${API_BASE}/products`;
     const method = isEdit ? 'PUT' : 'POST';
 
     try {
@@ -277,7 +278,7 @@ export default function SellerDashboard() {
     setProfileLoading(true);
 
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/auth/apply-seller`, {
+      const res = await fetch(`${API_BASE}/auth/apply-seller`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -298,7 +299,7 @@ export default function SellerDashboard() {
 
   const handleUpdateOrderStatus = async (orderId, nextStatus) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/${orderId}/status`, {
+      const res = await fetch(`${API_BASE}/orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -324,7 +325,7 @@ export default function SellerDashboard() {
 
   const handleToggleFeedbackPermission = async (orderItemId, permittedValue) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:5000/api/orders/items/${orderItemId}/feedback-permission`, {
+      const res = await fetch(`${API_BASE}/orders/items/${orderItemId}/feedback-permission`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -358,7 +359,7 @@ export default function SellerDashboard() {
       reader.onloadend = async () => {
         const base64Data = reader.result;
         try {
-          const res = await fetch(`http://${window.location.hostname}:5000/api/upload`, {
+          const res = await fetch(`${API_BASE}/upload`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useWishlist } from '../context/WishlistContext';
+import { API_BASE } from '../config';
 
 export default function CategoryPage() {
   const { categoryId } = useParams(); // 'sofas' or 'beds'
@@ -33,7 +34,7 @@ export default function CategoryPage() {
     setSelectedColors([]);
     setSelectedPriceRange('');
 
-    let url = `http://${window.location.hostname}:5000/api/products?category=${categoryId}`;
+    let url = `${API_BASE}/products?category=${categoryId}`;
     if (searchQuery) {
       url += `&search=${encodeURIComponent(searchQuery)}`;
     }

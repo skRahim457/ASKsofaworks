@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
+import { API_BASE } from '../config';
 
 const WishlistContext = createContext();
 
@@ -16,7 +17,7 @@ export const WishlistProvider = ({ children }) => {
 
     setLoading(true);
     try {
-      const response = await fetch(`http://${window.location.hostname}:5000/api/wishlist`, {
+      const response = await fetch(`${API_BASE}/wishlist`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -43,7 +44,7 @@ export const WishlistProvider = ({ children }) => {
     }
 
     try {
-      const response = await fetch(`http://${window.location.hostname}:5000/api/wishlist`, {
+      const response = await fetch(`${API_BASE}/wishlist`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
