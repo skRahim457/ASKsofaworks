@@ -1532,6 +1532,19 @@ app.delete('/api/admin/inquiries/:id', authenticateToken, authorizeAdminOrSeller
   }
 });
 
+// Root Endpoint
+app.get('/', (req, res) => {
+  res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
+});
+
+// Health Endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'success', 
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' 
+  });
+});
+
 // Vercel Serverless routing fallthrough
 app.use((req, res) => {
   res.status(404).json({ message: `API route not found: ${req.method} ${req.path}` });
