@@ -4,7 +4,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
-const { connectToDatabase, initDatabase } = require('./db');
+const { connectToDatabase, initDatabase, sampleProducts } = require('./db');
 const { User, Product, Order, Review, Wishlist, LoginHistory, Inquiry } = require('./models');
 
 const app = express();
@@ -649,6 +649,38 @@ app.get('/api/products', async (req, res) => {
   }
 
   try {
+    const isConnected = mongoose.connection.readyState === 1;
+    if (!isConnected) {
+      let list = sampleProducts.map((prod, idx) => ({
+        id: (idx + 1).toString(),
+        name: prod.name,
+        category: prod.category,
+        description: prod.description,
+        material: prod.material,
+        price: prod.price,
+        discount_price: prod.discount_price,
+        stock: prod.stock,
+        image_url: prod.image_url,
+        colors: prod.colors,
+        sizes: prod.sizes,
+        additional_images: prod.additional_images || [],
+        upholstery_types: ['Cloth', 'Rexine'],
+        set_types: [],
+        seller_id: null,
+        rating: 4.8,
+        review_count: 12
+      }));
+
+      if (category && category !== 'all') {
+        list = list.filter(p => p.category === category);
+      }
+      if (search) {
+        const s = search.toLowerCase();
+        list = list.filter(p => p.name.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
+      }
+      return res.json(list);
+    }
+
     const products = await Product.find(filter).sort(sortCriteria);
     
     // Programmatically join reviews average rating and count
@@ -694,6 +726,35 @@ app.get('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
 
   try {
+    const isConnected = mongoose.connection.readyState === 1;
+    if (!isConnected) {
+      const idx = sampleProducts.findIndex((p, i) => (i + 1).toString() === productId);
+      if (idx !== -1) {
+        const prod = sampleProducts[idx];
+        return res.json({
+          id: (idx + 1).toString(),
+          name: prod.name,
+          category: prod.category,
+          description: prod.description,
+          material: prod.material,
+          price: prod.price,
+          discount_price: prod.discount_price,
+          stock: prod.stock,
+          image_url: prod.image_url,
+          colors: prod.colors,
+          sizes: prod.sizes,
+          additional_images: prod.additional_images || [],
+          upholstery_types: ['Cloth', 'Rexine'],
+          set_types: [],
+          seller_id: null,
+          rating: 4.8,
+          review_count: 12,
+          reviewsList: [],
+          isEligibleToReview: false
+        });
+      }
+    }
+
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({ message: 'Invalid Product ID format' });
     }
