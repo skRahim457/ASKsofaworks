@@ -167,17 +167,23 @@ const safeParseArray = (val, defaultVal = []) => {
 };
 
 // ==========================================
-// API ROUTER (Dual-Mounted on /api and /)
+// API ROUTER
 // ==========================================
 const apiRouter = express.Router();
 
-// Root Endpoint
-apiRouter.get('/', (req, res) => {
+// Root API Endpoint
+apiRouter.get('/api', (req, res) => {
   res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
 });
 
 // Health Endpoint
 apiRouter.get('/health', (req, res) => {
+  res.json({ 
+    status: 'success', 
+    database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
+  });
+});
+apiRouter.get('/api/health', (req, res) => {
   res.json({ 
     status: 'success', 
     database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
@@ -577,17 +583,36 @@ apiRouter.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, asy
   res.json(fallbackInquiries);
 });
 
-// Mount router on BOTH /api and root /
+const embeddedHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASKsofaworks</title>
+    <script type="module" crossorigin src="/assets/index-C29Q3Z5K.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BQmRmFaR.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>`;
+
+// Mount API router on BOTH /api and root /
 app.use('/api', apiRouter);
 app.use('/', apiRouter);
 
-// Single Page Application Fallback for any other page route
+// Single Page Application Fallback for all storefront pages
 app.use((req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+    return res.status(404).json({ message: `API route not found: ${req.method} ${req.originalUrl}` });
+  }
   const indexPath = path.join(__dirname, 'public', 'index.html');
   if (fs.existsSync(indexPath)) {
     return res.sendFile(indexPath);
   }
-  res.status(404).send('Store page not found');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(embeddedHtml);
 });
 
 module.exports = app;
