@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useWishlist } from '../context/WishlistContext';
 import { API_BASE } from '../config';
+import { fallbackProducts } from '../data/fallbackData';
 
 export default function Home() {
   const { toggleWishlist, isInWishlist } = useWishlist();
 
-  const [suggestedProducts, setSuggestedProducts] = useState([]);
-  const [sofaDeals, setSofaDeals] = useState([]);
-  const [luxuryBeds, setLuxuryBeds] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [suggestedProducts, setSuggestedProducts] = useState(fallbackProducts);
+  const [sofaDeals, setSofaDeals] = useState(fallbackProducts.filter(p => ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category)));
+  const [luxuryBeds, setLuxuryBeds] = useState(fallbackProducts.filter(p => p.category === 'beds'));
+  const [loading, setLoading] = useState(false);
 
   // Scroll Container Refs
   const suggestedTrackRef = useRef(null);
@@ -20,23 +21,16 @@ export default function Home() {
     fetch(`${API_BASE}/products`)
       .then((res) => res.json())
       .then((data) => {
-        const productList = Array.isArray(data) ? data : [];
-        // Suggested: Mix of items
-        setSuggestedProducts(productList);
-        
-        // Sofa deals: Include all custom sofa categories (sofas, l-shape, corner, sets)
-        const sofas = productList.filter(p => p && p.category && ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category));
-        setSofaDeals(sofas);
-
-        // Luxury beds: Beds
-        const beds = productList.filter(p => p && p.category === 'beds');
-        setLuxuryBeds(beds);
-
-        setLoading(false);
+        if (Array.isArray(data) && data.length > 0) {
+          setSuggestedProducts(data);
+          const sofas = data.filter(p => p && p.category && ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category));
+          setSofaDeals(sofas);
+          const beds = data.filter(p => p && p.category === 'beds');
+          setLuxuryBeds(beds);
+        }
       })
       .catch((err) => {
-        console.error('Error loading products:', err);
-        setLoading(false);
+        console.warn('Using client showroom fallback products:', err.message);
       });
   }, []);
 

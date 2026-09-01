@@ -2,15 +2,21 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useWishlist } from '../context/WishlistContext';
 import { API_BASE } from '../config';
+import { fallbackProducts } from '../data/fallbackData';
 
 export default function CategoryPage() {
   const { categoryId } = useParams(); // 'sofas' or 'beds'
   const location = useLocation();
   const { toggleWishlist, isInWishlist } = useWishlist();
 
-  const [products, setProducts] = useState([]);
-  const [filteredProducts, setFilteredProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const getInitialFallback = () => {
+    if (!categoryId || categoryId === 'all') return fallbackProducts;
+    return fallbackProducts.filter(p => p.category === categoryId || (categoryId === 'sofas' && ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category)));
+  };
+
+  const [products, setProducts] = useState(getInitialFallback);
+  const [filteredProducts, setFilteredProducts] = useState(getInitialFallback);
+  const [loading, setLoading] = useState(false);
 
   // Filter States
   const [selectedMaterials, setSelectedMaterials] = useState([]);
@@ -28,7 +34,6 @@ export default function CategoryPage() {
   const colorsList = ['Cream', 'Grey', 'Blue', 'Green', 'Brown', 'Taupe', 'Charcoal'];
 
   useEffect(() => {
-    setLoading(true);
     // Reset filters when category changes
     setSelectedMaterials([]);
     setSelectedColors([]);
@@ -42,16 +47,13 @@ export default function CategoryPage() {
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        const productList = Array.isArray(data) ? data : [];
-        setProducts(productList);
-        setFilteredProducts(productList);
-        setLoading(false);
+        if (Array.isArray(data) && data.length > 0) {
+          setProducts(data);
+          setFilteredProducts(data);
+        }
       })
       .catch((err) => {
-        console.error('Error fetching products:', err);
-        setProducts([]);
-        setFilteredProducts([]);
-        setLoading(false);
+        console.warn('Using client fallback category data:', err.message);
       });
   }, [categoryId, searchQuery]);
 
