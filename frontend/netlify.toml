@@ -4,7 +4,7 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://temporary-brisk-bassoon-k6fsgvg.vercel.app/api/:splat"
+  to = "https://as-ksofaworks.vercel.app/api/:splat"
   status = 200
   force = true
 
