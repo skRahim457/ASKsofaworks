@@ -1,0 +1,2 @@
+/api/*  https://temporary-brisk-bassoon-k6fsgvg.vercel.app/api/:splat  200!
+/*      /index.html                                                   200
