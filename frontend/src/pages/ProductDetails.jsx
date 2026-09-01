@@ -4,6 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useWishlist } from '../context/WishlistContext';
 import { API_BASE } from '../config';
+import { fallbackProducts } from '../data/fallbackData';
 
 export default function ProductDetails() {
   const { id } = useParams();
@@ -33,6 +34,21 @@ export default function ProductDetails() {
   const [submitError, setSubmitError] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState('');
 
+  const initProductState = (data) => {
+    setProduct(data);
+    setActiveImage(data.image_url);
+    setSelectedColor((data.colors && data.colors[0]) || 'Standard');
+    setSecondaryColor((data.colors && (data.colors[1] || data.colors[0])) || 'Standard');
+    setSelectedSize((data.sizes && data.sizes[0]) || 'Standard');
+    setSelectedSetType(data.set_types && data.set_types.length > 0 ? data.set_types[0] : 'None');
+    if (data.upholstery_types && data.upholstery_types.length > 0) {
+      const defaultUph = data.upholstery_types[0] === 'Cloth' ? 'Premium Cloth' : data.upholstery_types[0] === 'Rexine' ? 'Luxury Rexine' : data.upholstery_types[0];
+      setUpholstery(defaultUph);
+    } else {
+      setUpholstery('None');
+    }
+  };
+
   const fetchProductDetails = async () => {
     try {
       const headers = {};
@@ -40,29 +56,24 @@ export default function ProductDetails() {
         headers['Authorization'] = `Bearer ${token}`;
       }
       const res = await fetch(`${API_BASE}/products/${id}`, { headers });
-      if (!res.ok) throw new Error('Product not found');
+      if (!res.ok) throw new Error('Product not found in API');
       const data = await res.json();
-      
-      setProduct(data);
-      setActiveImage(data.image_url);
-      setSelectedColor(data.colors[0]);
-      setSecondaryColor(data.colors[1] || data.colors[0]);
-      setSelectedSize(data.sizes[0] || 'Standard');
-      setSelectedSetType(data.set_types && data.set_types.length > 0 ? data.set_types[0] : 'None');
-      if (data.upholstery_types && data.upholstery_types.length > 0) {
-        const defaultUph = data.upholstery_types[0] === 'Cloth' ? 'Premium Cloth' : data.upholstery_types[0] === 'Rexine' ? 'Luxury Rexine' : data.upholstery_types[0];
-        setUpholstery(defaultUph);
-      } else {
-        setUpholstery('None');
-      }
+      initProductState(data);
       
       // Fetch related products
       const relRes = await fetch(`${API_BASE}/products?category=${data.category}`);
       const relData = await relRes.json();
-      // Filter out current product
-      setRelatedProducts(relData.filter(p => p.id !== data.id).slice(0, 3));
+      if (Array.isArray(relData)) {
+        setRelatedProducts(relData.filter(p => p && String(p.id) !== String(data.id)).slice(0, 3));
+      }
     } catch (err) {
-      console.error(err);
+      console.warn('Using client showroom fallback product detail:', err.message);
+      const fallbackItem = fallbackProducts.find(p => String(p.id) === String(id)) || fallbackProducts[0];
+      if (fallbackItem) {
+        initProductState(fallbackItem);
+        const related = fallbackProducts.filter(p => p.category === fallbackItem.category && String(p.id) !== String(fallbackItem.id)).slice(0, 3);
+        setRelatedProducts(related.length > 0 ? related : fallbackProducts.slice(0, 3));
+      }
     } finally {
       setLoading(false);
     }

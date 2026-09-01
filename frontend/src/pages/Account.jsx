@@ -64,8 +64,15 @@ export default function Account() {
   }, [location.search]);
 
   const loadOrders = () => {
-    if (!token) return;
     setOrdersLoading(true);
+    const localOrders = JSON.parse(localStorage.getItem('ask_sofa_orders') || '[]');
+    
+    if (!token) {
+      setOrders(localOrders);
+      setOrdersLoading(false);
+      return;
+    }
+
     fetch(`${API_BASE}/orders/my-orders`, {
       headers: {
         'Authorization': `Bearer ${token}`
@@ -73,11 +80,16 @@ export default function Account() {
     })
       .then((res) => res.json())
       .then((data) => {
-        setOrders(data);
+        if (Array.isArray(data) && data.length > 0) {
+          setOrders(data);
+        } else {
+          setOrders(localOrders);
+        }
         setOrdersLoading(false);
       })
       .catch((err) => {
-        console.error(err);
+        console.warn('Using local orders state:', err.message);
+        setOrders(localOrders);
         setOrdersLoading(false);
       });
   };
