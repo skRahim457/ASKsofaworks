@@ -167,10 +167,25 @@ const safeParseArray = (val, defaultVal = []) => {
 };
 
 // ==========================================
-// 1. AUTHENTICATION ENDPOINTS
+// API ROUTER (Dual-Mounted on /api and /)
 // ==========================================
+const apiRouter = express.Router();
 
-app.post('/api/auth/register', async (req, res) => {
+// Root Endpoint
+apiRouter.get('/', (req, res) => {
+  res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
+});
+
+// Health Endpoint
+apiRouter.get('/health', (req, res) => {
+  res.json({ 
+    status: 'success', 
+    database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
+  });
+});
+
+// Register
+apiRouter.post('/auth/register', async (req, res) => {
   const { name, email, password, mobile } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -254,7 +269,8 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+// Login
+apiRouter.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ message: 'Mobile Number or Email Address and password are required' });
@@ -335,7 +351,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.get('/api/auth/me', authenticateToken, async (req, res) => {
+// Profile
+apiRouter.get('/auth/me', authenticateToken, async (req, res) => {
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
   try {
     if (!isConnected) {
@@ -355,11 +372,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
-// ==========================================
-// 2. PRODUCT ENDPOINTS
-// ==========================================
-
-app.get('/api/products', async (req, res) => {
+// Products
+apiRouter.get('/products', async (req, res) => {
   const { category, search, material, color, sort } = req.query;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -419,12 +433,13 @@ app.get('/api/products', async (req, res) => {
     
     res.json(formattedProducts);
   } catch (error) {
-    console.warn('Database query error in /api/products, falling back safely:', error.message);
+    console.warn('Database query error in /products, falling back safely:', error.message);
     return getFallbackProductList(category, search, material, color, sort, res);
   }
 });
 
-app.get('/api/products/:id', async (req, res) => {
+// Single Product
+apiRouter.get('/products/:id', async (req, res) => {
   const productId = req.params.id;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -492,11 +507,8 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// ==========================================
-// 3. ORDERS, WISHLIST, INQUIRIES & HEALTH
-// ==========================================
-
-app.post('/api/orders', authenticateToken, async (req, res) => {
+// Orders
+apiRouter.post('/orders', authenticateToken, async (req, res) => {
   const { name, mobile, email, address, city, state, pincode, total_price, payment_method, items } = req.body;
   if (!name || !mobile || !email || !address || !city || !state || !pincode || !total_price || !payment_method || !items || items.length === 0) {
     return res.status(400).json({ message: 'Missing required order details' });
@@ -527,18 +539,19 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   });
 });
 
-app.get('/api/orders/my-orders', authenticateToken, async (req, res) => {
+apiRouter.get('/orders/my-orders', authenticateToken, async (req, res) => {
   const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
   res.json(myOrders);
 });
 
-app.get('/api/wishlist', authenticateToken, async (req, res) => {
+// Wishlist
+apiRouter.get('/wishlist', authenticateToken, async (req, res) => {
   const userWishlist = fallbackWishlists.filter(w => w.user_id === req.user.id);
   const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
   res.json(prods);
 });
 
-app.post('/api/wishlist', authenticateToken, async (req, res) => {
+apiRouter.post('/wishlist', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   if (!productId) return res.status(400).json({ message: 'Product ID required' });
   const idx = fallbackWishlists.findIndex(w => w.user_id === req.user.id && w.product_id === productId);
@@ -550,7 +563,8 @@ app.post('/api/wishlist', authenticateToken, async (req, res) => {
   res.json({ added: true, message: 'Added to wishlist' });
 });
 
-app.post('/api/inquiries', async (req, res) => {
+// Inquiries
+apiRouter.post('/inquiries', async (req, res) => {
   const { name, email, message } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ message: 'Name, email, and message are required' });
@@ -559,26 +573,16 @@ app.post('/api/inquiries', async (req, res) => {
   res.status(201).json({ message: 'Inquiry submitted successfully!' });
 });
 
-app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+apiRouter.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   res.json(fallbackInquiries);
 });
 
-app.get('/api', (req, res) => {
-  res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
-});
+// Mount router on BOTH /api and root /
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'success', 
-    database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
-  });
-});
-
-// Single Page Application Fallback
+// Single Page Application Fallback for any other page route
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
-    return res.status(404).json({ message: `API route not found: ${req.method} ${req.originalUrl}` });
-  }
   const indexPath = path.join(__dirname, 'public', 'index.html');
   if (fs.existsSync(indexPath)) {
     return res.sendFile(indexPath);
