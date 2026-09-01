@@ -1050,9 +1050,7 @@ app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async
   }
 });
 
-// ==========================================
-// 5. ROOT & HEALTH ENDPOINTS
-// ==========================================
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Root Endpoint
 app.get('/api', (req, res) => {
@@ -1065,6 +1063,18 @@ app.get('/api/health', (req, res) => {
     status: 'success', 
     database: mongoose.connection.readyState === 1 ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
   });
+});
+
+// Single Page Application Fallback for all page routes
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+    return res.status(404).json({ message: `API route not found: ${req.method} ${req.originalUrl}` });
+  }
+  const indexPath = path.join(__dirname, 'public', 'index.html');
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  res.status(404).send('Store page not found');
 });
 
 // Export app for Vercel
