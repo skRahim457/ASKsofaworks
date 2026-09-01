@@ -42,19 +42,22 @@ export default function CategoryPage() {
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        setProducts(data);
-        setFilteredProducts(data);
+        const productList = Array.isArray(data) ? data : [];
+        setProducts(productList);
+        setFilteredProducts(productList);
         setLoading(false);
       })
       .catch((err) => {
         console.error('Error fetching products:', err);
+        setProducts([]);
+        setFilteredProducts([]);
         setLoading(false);
       });
   }, [categoryId, searchQuery]);
 
   // Apply filters and sorting
   useEffect(() => {
-    let result = [...products];
+    let result = Array.isArray(products) ? [...products] : [];
 
     // Filter by Materials
     if (selectedMaterials.length > 0) {

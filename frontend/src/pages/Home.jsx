@@ -20,15 +20,16 @@ export default function Home() {
     fetch(`${API_BASE}/products`)
       .then((res) => res.json())
       .then((data) => {
+        const productList = Array.isArray(data) ? data : [];
         // Suggested: Mix of items
-        setSuggestedProducts(data);
+        setSuggestedProducts(productList);
         
         // Sofa deals: Include all custom sofa categories (sofas, l-shape, corner, sets)
-        const sofas = data.filter(p => ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category));
+        const sofas = productList.filter(p => p && p.category && ['sofas', 'l-shape-sofas', 'corner-sofas', 'sofa-sets'].includes(p.category));
         setSofaDeals(sofas);
 
         // Luxury beds: Beds
-        const beds = data.filter(p => p.category === 'beds');
+        const beds = productList.filter(p => p && p.category === 'beds');
         setLuxuryBeds(beds);
 
         setLoading(false);
