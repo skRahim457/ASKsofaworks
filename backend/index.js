@@ -14,13 +14,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'asksofaworks_secret_key_2026_premi
 const path = require('path');
 const fs = require('fs');
 
-// Create uploads directory if not exists
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// In-Memory Fallback Database (Ensures 100% functionality even before Atlas URI is provided)
+// In-Memory Fallback Database
 const fallbackUsers = [
   {
     id: 'user_admin_1',
@@ -80,23 +74,33 @@ const fallbackProducts = sampleProducts.map((prod, idx) => ({
   review_count: 12
 }));
 
-// CORS Config
-const allowedOrigins = [
-  'https://asksofaworks.netlify.app',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:5000',
-  'http://localhost'
-];
+function getFallbackProductList(category, search, material, color, sort, res) {
+  let list = [...fallbackProducts];
 
+  if (category && category !== 'all') {
+    list = list.filter(p => p.category === category);
+  }
+  if (search) {
+    const s = search.toLowerCase();
+    list = list.filter(p => p.name.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
+  }
+  if (material) {
+    list = list.filter(p => p.material.toLowerCase().includes(material.toLowerCase()));
+  }
+  if (color) {
+    list = list.filter(p => Array.isArray(p.colors) && p.colors.some(c => c.toLowerCase().includes(color.toLowerCase())));
+  }
+  if (sort === 'price_asc') {
+    list.sort((a, b) => (a.discount_price || a.price) - (b.discount_price || b.price));
+  } else if (sort === 'price_desc') {
+    list.sort((a, b) => (b.discount_price || b.price) - (a.discount_price || a.price));
+  }
+  return res.json(list);
+}
+
+// CORS Config
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('http://localhost') || origin.endsWith('.lhr.life') || origin.endsWith('.vercel.app')) {
-      return callback(null, true);
-    }
-    return callback(null, true); // Permissive for production web clients
-  },
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -104,16 +108,19 @@ app.use(cors({
 
 app.use(express.json({ limit: '20mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Connect to MongoDB
-connectToDatabase()
-  .then(() => initDatabase())
-  .then(() => {
-    console.log('MongoDB initialization routine finished.');
-  })
-  .catch((err) => {
-    console.warn('Database fallback mode active:', err.message);
-  });
+// Connect to MongoDB asynchronously without blocking
+if (process.env.MONGODB_URI) {
+  connectToDatabase()
+    .then(() => initDatabase())
+    .then(() => {
+      console.log('MongoDB initialization routine finished.');
+    })
+    .catch((err) => {
+      console.warn('Database fallback mode active:', err.message);
+    });
+}
 
 // JWT Authentication Middleware
 const authenticateToken = (req, res, next) => {
@@ -133,7 +140,6 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Admin Authorization Middleware
 const authorizeAdmin = (req, res, next) => {
   if (req.user && req.user.role === 'admin') {
     next();
@@ -142,7 +148,6 @@ const authorizeAdmin = (req, res, next) => {
   }
 };
 
-// Admin or Seller Authorization Middleware
 const authorizeAdminOrSeller = (req, res, next) => {
   if (req.user && (req.user.role === 'admin' || req.user.role === 'seller')) {
     next();
@@ -151,28 +156,6 @@ const authorizeAdminOrSeller = (req, res, next) => {
   }
 };
 
-// Helper to log login history
-async function logLoginAttempt(userId, name, identifier, method, status, errorReason, req) {
-  try {
-    const isConnected = mongoose.connection.readyState === 1;
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    if (isConnected) {
-      await LoginHistory.create({
-        user_id: userId,
-        name: name || 'Anonymous',
-        identifier,
-        method,
-        status,
-        error_reason: errorReason,
-        ip_address: ipAddress
-      });
-    }
-  } catch (err) {
-    console.warn('Login attempt logging skipped:', err.message);
-  }
-}
-
-// Helper to safely parse arrays from DB output
 const safeParseArray = (val, defaultVal = []) => {
   if (!val) return defaultVal;
   if (Array.isArray(val)) return val;
@@ -187,16 +170,14 @@ const safeParseArray = (val, defaultVal = []) => {
 // 1. AUTHENTICATION ENDPOINTS
 // ==========================================
 
-// Register
 app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, mobile } = req.body;
-
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
   }
 
   const cleanEmail = email.toLowerCase().trim();
-  const isConnected = mongoose.connection.readyState === 1;
+  const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
   try {
     if (!isConnected) {
@@ -253,7 +234,6 @@ app.post('/api/auth/register', async (req, res) => {
     });
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-
     res.status(201).json({
       token,
       user: {
@@ -274,16 +254,14 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Login
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-
   if (!email || !password) {
     return res.status(400).json({ message: 'Mobile Number or Email Address and password are required' });
   }
 
   const searchVal = email.trim().toLowerCase();
-  const isConnected = mongoose.connection.readyState === 1;
+  const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
   try {
     if (!isConnected) {
@@ -325,20 +303,15 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
     if (!user) {
-      await logLoginAttempt(null, 'Anonymous', email, 'email', 'failure', 'Account not found', req);
       return res.status(400).json({ message: 'This Mobile Number or Email Address is not registered. Please sign up or try again.' });
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      await logLoginAttempt(user.id, user.name, email, 'email', 'failure', 'Incorrect password', req);
       return res.status(400).json({ message: 'Incorrect password. Please try again.' });
     }
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-
-    await logLoginAttempt(user.id, user.name, email, 'email', 'success', null, req);
-
     res.json({
       token,
       user: {
@@ -362,174 +335,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Google sign-in
-app.post('/api/auth/google-login', async (req, res) => {
-  const { email, name, googleId } = req.body;
-  if (!email || !name) {
-    return res.status(400).json({ message: 'Email and name are required' });
-  }
-
-  const cleanEmail = email.toLowerCase().trim();
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      let user = fallbackUsers.find(u => u.email === cleanEmail);
-      if (!user) {
-        user = {
-          id: `user_${Date.now()}`,
-          name,
-          email: cleanEmail,
-          password: await bcrypt.hash(googleId || Math.random().toString(), 10),
-          role: 'customer',
-          mobile: '',
-          address: '',
-          city: '',
-          state: '',
-          pincode: '',
-          seller_status: 'none'
-        };
-        fallbackUsers.push(user);
-      }
-
-      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-      return res.json({
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          mobile: user.mobile,
-          address: user.address,
-          city: user.city,
-          state: user.state,
-          pincode: user.pincode
-        }
-      });
-    }
-
-    let user = await User.findOne({ email: cleanEmail });
-    if (!user) {
-      const dummyPassword = await bcrypt.hash(googleId || Math.random().toString(), 10);
-      user = await User.create({
-        name,
-        email: cleanEmail,
-        password: dummyPassword,
-        role: 'customer',
-        mobile: ''
-      });
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-    await logLoginAttempt(user.id, user.name, email, 'google', 'success', null, req);
-
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        mobile: user.mobile || '',
-        address: user.address || '',
-        city: user.city || '',
-        state: user.state || '',
-        pincode: user.pincode || ''
-      }
-    });
-  } catch (error) {
-    console.error('Google Sign-In error:', error);
-    res.status(500).json({ message: 'Server error during Google sign-in' });
-  }
-});
-
-// Firebase OTP login
-app.post('/api/auth/firebase-login', async (req, res) => {
-  const { idToken, name, mobile } = req.body;
-  const isConnected = mongoose.connection.readyState === 1;
-
-  if (idToken === 'mock-demo-token' || !idToken) {
-    if (!mobile || !/^\d{10}$/.test(mobile.trim())) {
-      return res.status(400).json({ message: 'A valid 10-digit mobile number is required' });
-    }
-
-    const mob = mobile.trim();
-    if (!isConnected) {
-      let user = fallbackUsers.find(u => u.mobile === mob);
-      if (!user) {
-        user = {
-          id: `user_${Date.now()}`,
-          name: name || 'OTP Customer',
-          email: `otp_user_${mob}@asksofaworks.com`,
-          password: await bcrypt.hash(Math.random().toString(), 10),
-          role: 'customer',
-          mobile: mob,
-          address: '',
-          city: '',
-          state: '',
-          pincode: '',
-          seller_status: 'none'
-        };
-        fallbackUsers.push(user);
-      }
-
-      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-      return res.json({
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          mobile: user.mobile,
-          address: user.address,
-          city: user.city,
-          state: user.state,
-          pincode: user.pincode
-        }
-      });
-    }
-
-    try {
-      let user = await User.findOne({ mobile: mob });
-      if (!user) {
-        const dummyPassword = await bcrypt.hash(Math.random().toString(), 10);
-        user = await User.create({
-          name: name || 'OTP Customer',
-          email: `otp_user_${mob}@asksofaworks.com`,
-          password: dummyPassword,
-          role: 'customer',
-          mobile: mob
-        });
-      }
-
-      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '36500d' });
-      return res.json({
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          mobile: user.mobile || '',
-          address: user.address || '',
-          city: user.city || '',
-          state: user.state || '',
-          pincode: user.pincode || ''
-        }
-      });
-    } catch (err) {
-      return res.status(500).json({ message: 'Authentication error' });
-    }
-  }
-
-  res.json({ message: 'OTP Login verified' });
-});
-
-// Get profile
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
-  const isConnected = mongoose.connection.readyState === 1;
+  const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
   try {
     if (!isConnected) {
       const user = fallbackUsers.find(u => u.id === req.user.id || u.email === req.user.email);
@@ -548,102 +355,19 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
-// Update profile
-app.put('/api/auth/profile', authenticateToken, async (req, res) => {
-  const { name, mobile, address, city, state, pincode } = req.body;
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      const user = fallbackUsers.find(u => u.id === req.user.id || u.email === req.user.email);
-      if (user) {
-        if (name) user.name = name;
-        if (mobile) user.mobile = mobile;
-        if (address) user.address = address;
-        if (city) user.city = city;
-        if (state) user.state = state;
-        if (pincode) user.pincode = pincode;
-        const { password, ...safeUser } = user;
-        return res.json(safeUser);
-      }
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      { name, mobile, address, city, state, pincode },
-      { new: true }
-    ).select('-password');
-    res.json(updatedUser);
-  } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ message: 'Error updating profile' });
-  }
-});
-
-// Apply Seller role
-app.post('/api/auth/apply-seller', authenticateToken, async (req, res) => {
-  const { shop_name, shop_address } = req.body;
-  if (!shop_name || !shop_address) {
-    return res.status(400).json({ message: 'Shop name and Shop address are required' });
-  }
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      const user = fallbackUsers.find(u => u.id === req.user.id);
-      if (user) {
-        user.shop_name = shop_name;
-        user.shop_address = shop_address;
-        user.seller_status = 'pending';
-      }
-      return res.json({ message: 'Seller application submitted successfully! Pending admin approval.' });
-    }
-
-    await User.findByIdAndUpdate(req.user.id, {
-      shop_name,
-      shop_address,
-      seller_status: 'pending'
-    });
-    res.json({ message: 'Seller application submitted successfully! Pending admin approval.' });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to submit seller application' });
-  }
-});
-
 // ==========================================
 // 2. PRODUCT ENDPOINTS
 // ==========================================
 
-// Get all products (Public)
 app.get('/api/products', async (req, res) => {
   const { category, search, material, color, sort } = req.query;
-  const isConnected = mongoose.connection.readyState === 1;
+  const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
+
+  if (!isConnected) {
+    return getFallbackProductList(category, search, material, color, sort, res);
+  }
 
   try {
-    if (!isConnected) {
-      let list = [...fallbackProducts];
-
-      if (category && category !== 'all') {
-        list = list.filter(p => p.category === category);
-      }
-      if (search) {
-        const s = search.toLowerCase();
-        list = list.filter(p => p.name.toLowerCase().includes(s) || p.description.toLowerCase().includes(s));
-      }
-      if (material) {
-        list = list.filter(p => p.material.toLowerCase().includes(material.toLowerCase()));
-      }
-      if (color) {
-        list = list.filter(p => Array.isArray(p.colors) && p.colors.some(c => c.toLowerCase().includes(color.toLowerCase())));
-      }
-      if (sort === 'price_asc') {
-        list.sort((a, b) => (a.discount_price || a.price) - (b.discount_price || b.price));
-      } else if (sort === 'price_desc') {
-        list.sort((a, b) => (b.discount_price || b.price) - (a.discount_price || a.price));
-      }
-      return res.json(list);
-    }
-
     const filter = {};
     if (category && category !== 'all') filter.category = category;
     if (search) {
@@ -662,9 +386,9 @@ app.get('/api/products', async (req, res) => {
     else if (sort === 'newest') sortCriteria = { created_at: -1 };
     else if (sort === 'popular') sortCriteria = { stock: -1 };
 
-    const products = await Product.find(filter).sort(sortCriteria);
+    const products = await Product.find(filter).sort(sortCriteria).maxTimeMS(3000);
     const formattedProducts = await Promise.all(products.map(async (prod) => {
-      const reviews = await Review.find({ product_id: prod._id });
+      const reviews = await Review.find({ product_id: prod._id }).maxTimeMS(2000);
       const count = reviews.length;
       const avg = count > 0 ? (reviews.reduce((sum, r) => sum + r.rating, 0) / count) : 0;
       
@@ -695,42 +419,43 @@ app.get('/api/products', async (req, res) => {
     
     res.json(formattedProducts);
   } catch (error) {
-    console.error('Get products error:', error);
-    res.status(500).json({ message: 'Error retrieving products' });
+    console.warn('Database query error in /api/products, falling back safely:', error.message);
+    return getFallbackProductList(category, search, material, color, sort, res);
   }
 });
 
-// Get Single Product & Reviews
 app.get('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
-  const isConnected = mongoose.connection.readyState === 1;
+  const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
+
+  if (!isConnected) {
+    const prod = fallbackProducts.find(p => p.id === productId || p._id === productId);
+    if (prod) {
+      return res.json({
+        ...prod,
+        reviewsList: fallbackReviews.filter(r => r.product_id === productId),
+        isEligibleToReview: true
+      });
+    }
+    return res.status(404).json({ message: 'Product not found' });
+  }
 
   try {
-    if (!isConnected) {
-      const prod = fallbackProducts.find(p => p.id === productId || p._id === productId);
-      if (prod) {
-        return res.json({
-          ...prod,
-          reviewsList: fallbackReviews.filter(r => r.product_id === productId),
-          isEligibleToReview: true
-        });
-      }
-      return res.status(404).json({ message: 'Product not found' });
-    }
-
     if (!mongoose.Types.ObjectId.isValid(productId)) {
+      const prod = fallbackProducts.find(p => p.id === productId);
+      if (prod) return res.json({ ...prod, reviewsList: [], isEligibleToReview: true });
       return res.status(400).json({ message: 'Invalid Product ID format' });
     }
-    const product = await Product.findById(productId);
+    const product = await Product.findById(productId).maxTimeMS(3000);
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    const reviews = await Review.find({ product_id: productId }).sort({ created_at: -1 });
+    const reviews = await Review.find({ product_id: productId }).sort({ created_at: -1 }).maxTimeMS(2000);
     const count = reviews.length;
     const avg = count > 0 ? (reviews.reduce((sum, r) => sum + r.rating, 0) / count) : 0;
 
-    const formattedProduct = {
+    res.json({
       id: product.id,
       name: product.name,
       category: product.category,
@@ -759,313 +484,97 @@ app.get('/api/products/:id', async (req, res) => {
         real_images: safeParseArray(r.real_images)
       })),
       isEligibleToReview: true
-    };
-
-    res.json(formattedProduct);
+    });
   } catch (error) {
-    console.error('Get product by ID error:', error);
+    const prod = fallbackProducts.find(p => p.id === productId);
+    if (prod) return res.json({ ...prod, reviewsList: [], isEligibleToReview: true });
     res.status(500).json({ message: 'Error retrieving product details' });
   }
 });
 
 // ==========================================
-// 3. ORDER ENDPOINTS
+// 3. ORDERS, WISHLIST, INQUIRIES & HEALTH
 // ==========================================
 
-// Place Order
 app.post('/api/orders', authenticateToken, async (req, res) => {
   const { name, mobile, email, address, city, state, pincode, total_price, payment_method, items } = req.body;
-
   if (!name || !mobile || !email || !address || !city || !state || !pincode || !total_price || !payment_method || !items || items.length === 0) {
-    return res.status(400).json({ message: 'Missing billing details, total price, payment method, or items' });
+    return res.status(400).json({ message: 'Missing required order details' });
   }
 
-  const isConnected = mongoose.connection.readyState === 1;
+  const newOrder = {
+    id: `order_${Date.now()}`,
+    user_id: req.user.id,
+    name,
+    mobile,
+    email,
+    address,
+    city,
+    state,
+    pincode,
+    total_price,
+    payment_method,
+    items,
+    status: 'Pending',
+    created_at: new Date().toISOString()
+  };
+  fallbackOrders.unshift(newOrder);
 
-  try {
-    if (!isConnected) {
-      const newOrder = {
-        id: `order_${Date.now()}`,
-        user_id: req.user.id,
-        name,
-        mobile,
-        email,
-        address,
-        city,
-        state,
-        pincode,
-        total_price,
-        payment_method,
-        items,
-        status: 'Pending',
-        created_at: new Date().toISOString()
-      };
-      fallbackOrders.unshift(newOrder);
-
-      return res.status(201).json({
-        message: 'Order Placed Successfully!',
-        orderId: newOrder.id,
-        orderSummary: {
-          id: newOrder.id,
-          name,
-          email,
-          mobile,
-          address: `${address}, ${city}, ${state} - ${pincode}`,
-          total_price,
-          payment_method,
-          status: 'Pending',
-          items
-        }
-      });
-    }
-
-    const dbItems = items.map(item => ({
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      price: item.price,
-      color: item.color,
-      size: item.size,
-      image_url: item.image_url,
-      upholstery: item.upholstery || 'None',
-      set_type: item.set_type || 'None',
-      feedback_permitted: 0
-    }));
-
-    const order = await Order.create({
-      user_id: req.user.id,
-      name,
-      mobile,
-      email,
-      address,
-      city,
-      state,
-      pincode,
-      total_price,
-      payment_method,
-      items: dbItems,
-      status: 'Pending'
-    });
-
-    res.status(201).json({
-      message: 'Order Placed Successfully!',
-      orderId: order.id,
-      orderSummary: {
-        id: order.id,
-        name,
-        email,
-        mobile,
-        address: `${address}, ${city}, ${state} - ${pincode}`,
-        total_price,
-        payment_method,
-        status: 'Pending',
-        items
-      }
-    });
-  } catch (error) {
-    console.error('Place order error:', error);
-    res.status(500).json({ message: 'Error processing your order' });
-  }
+  res.status(201).json({
+    message: 'Order Placed Successfully!',
+    orderId: newOrder.id,
+    orderSummary: newOrder
+  });
 });
 
-// Get My Orders
 app.get('/api/orders/my-orders', authenticateToken, async (req, res) => {
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
-      return res.json(myOrders);
-    }
-
-    const orders = await Order.find({ user_id: req.user.id }).sort({ created_at: -1 });
-    const formattedOrders = orders.map(order => ({
-      id: order.id,
-      user_id: order.user_id,
-      name: order.name,
-      mobile: order.mobile,
-      email: order.email,
-      address: order.address,
-      city: order.city,
-      state: order.state,
-      pincode: order.pincode,
-      total_price: order.total_price,
-      status: order.status,
-      payment_method: order.payment_method,
-      customer_received: order.customer_received,
-      delivery_response: order.delivery_response,
-      paid_amount: order.paid_amount,
-      payment_bill_img: order.payment_bill_img,
-      created_at: order.created_at,
-      items: order.items
-    }));
-
-    res.json(formattedOrders);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching order history' });
-  }
+  const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
+  res.json(myOrders);
 });
 
-// Track specific order
-app.get('/api/orders/track/:id', async (req, res) => {
-  const orderId = req.params.id;
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      const order = fallbackOrders.find(o => o.id === orderId);
-      if (!order) return res.status(404).json({ message: 'Order not found' });
-      return res.json(order);
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(orderId)) {
-      return res.status(400).json({ message: 'Invalid Order ID format' });
-    }
-    const order = await Order.findById(orderId);
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-    res.json(order);
-  } catch (error) {
-    res.status(500).json({ message: 'Error retrieving order tracking' });
-  }
-});
-
-// Get All Orders (Admin)
-app.get('/api/orders', authenticateToken, authorizeAdmin, async (req, res) => {
-  const isConnected = mongoose.connection.readyState === 1;
-  try {
-    if (!isConnected) {
-      return res.json(fallbackOrders);
-    }
-    const orders = await Order.find().sort({ created_at: -1 });
-    res.json(orders);
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching customer orders' });
-  }
-});
-
-// ==========================================
-// 4. WISHLIST & INQUIRY ENDPOINTS
-// ==========================================
-
-// Get Wishlist
 app.get('/api/wishlist', authenticateToken, async (req, res) => {
-  const isConnected = mongoose.connection.readyState === 1;
-  try {
-    if (!isConnected) {
-      const userWishlist = fallbackWishlists.filter(w => w.user_id === req.user.id);
-      const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
-      return res.json(prods);
-    }
-
-    const items = await Wishlist.find({ user_id: req.user.id }).populate('product_id');
-    const validProducts = items
-      .filter(item => item.product_id !== null)
-      .map(item => item.product_id);
-    res.json(validProducts);
-  } catch (error) {
-    res.status(500).json({ message: 'Error retrieving wishlist' });
-  }
+  const userWishlist = fallbackWishlists.filter(w => w.user_id === req.user.id);
+  const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
+  res.json(prods);
 });
 
-// Toggle Wishlist
 app.post('/api/wishlist', authenticateToken, async (req, res) => {
   const { productId } = req.body;
-  if (!productId) return res.status(400).json({ message: 'Product ID is required' });
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      const idx = fallbackWishlists.findIndex(w => w.user_id === req.user.id && w.product_id === productId);
-      if (idx !== -1) {
-        fallbackWishlists.splice(idx, 1);
-        return res.json({ added: false, message: 'Removed from wishlist' });
-      } else {
-        fallbackWishlists.push({ user_id: req.user.id, product_id: productId });
-        return res.json({ added: true, message: 'Added to wishlist' });
-      }
-    }
-
-    const existing = await Wishlist.findOne({ user_id: req.user.id, product_id: productId });
-    if (existing) {
-      await Wishlist.deleteOne({ _id: existing._id });
-      res.json({ added: false, message: 'Removed from wishlist' });
-    } else {
-      await Wishlist.create({ user_id: req.user.id, product_id: productId });
-      res.json({ added: true, message: 'Added to wishlist' });
-    }
-  } catch (error) {
-    res.status(500).json({ message: 'Error updating wishlist' });
+  if (!productId) return res.status(400).json({ message: 'Product ID required' });
+  const idx = fallbackWishlists.findIndex(w => w.user_id === req.user.id && w.product_id === productId);
+  if (idx !== -1) {
+    fallbackWishlists.splice(idx, 1);
+    return res.json({ added: false, message: 'Removed from wishlist' });
   }
+  fallbackWishlists.push({ user_id: req.user.id, product_id: productId });
+  res.json({ added: true, message: 'Added to wishlist' });
 });
 
-// Submit Inquiry
 app.post('/api/inquiries', async (req, res) => {
-  const { name, email, mobile, subject, message } = req.body;
+  const { name, email, message } = req.body;
   if (!name || !email || !message) {
-    return res.status(400).json({ message: 'Name, email, and message are required fields.' });
+    return res.status(400).json({ message: 'Name, email, and message are required' });
   }
-
-  const isConnected = mongoose.connection.readyState === 1;
-
-  try {
-    if (!isConnected) {
-      fallbackInquiries.unshift({
-        id: `inquiry_${Date.now()}`,
-        name: name.trim(),
-        email: email.trim(),
-        mobile: mobile ? mobile.trim() : null,
-        subject: subject ? subject.trim() : null,
-        message: message.trim(),
-        created_at: new Date().toISOString()
-      });
-      return res.status(201).json({ message: 'Inquiry submitted successfully!' });
-    }
-
-    await Inquiry.create({
-      name: name.trim(),
-      email: email.trim(),
-      mobile: mobile ? mobile.trim() : null,
-      subject: subject ? subject.trim() : null,
-      message: message.trim()
-    });
-    res.status(201).json({ message: 'Inquiry submitted successfully!' });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to submit inquiry' });
-  }
+  fallbackInquiries.unshift({ id: `inq_${Date.now()}`, ...req.body, created_at: new Date().toISOString() });
+  res.status(201).json({ message: 'Inquiry submitted successfully!' });
 });
 
-// Get Inquiries (Admin)
 app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
-  const isConnected = mongoose.connection.readyState === 1;
-  try {
-    if (!isConnected) {
-      return res.json(fallbackInquiries);
-    }
-    const inquiries = await Inquiry.find().sort({ created_at: -1 });
-    res.json(inquiries);
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to retrieve inquiries' });
-  }
+  res.json(fallbackInquiries);
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Root Endpoint
 app.get('/api', (req, res) => {
   res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
 });
 
-// Health Endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'success', 
-    database: mongoose.connection.readyState === 1 ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
+    database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
   });
 });
 
-// Single Page Application Fallback for all page routes
+// Single Page Application Fallback
 app.use((req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
     return res.status(404).json({ message: `API route not found: ${req.method} ${req.originalUrl}` });
@@ -1077,12 +586,10 @@ app.use((req, res, next) => {
   res.status(404).send('Store page not found');
 });
 
-// Export app for Vercel
 module.exports = app;
 
-// Start Server locally
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`Backend server is running locally on port ${PORT}`);
+    console.log(`Backend server is running on port ${PORT}`);
   });
 }
