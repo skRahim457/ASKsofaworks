@@ -1066,7 +1066,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Single Page Application Fallback for all page routes
-app.get('*', (req, res, next) => {
+app.use((req, res, next) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
     return res.status(404).json({ message: `API route not found: ${req.method} ${req.originalUrl}` });
   }
