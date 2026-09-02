@@ -2,15 +2,24 @@
   "name": "ask-sofa-works-root",
   "version": "1.0.0",
   "description": "Root management package for ASK Sofa works e-commerce application",
+  "main": "api/index.js",
   "scripts": {
     "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install",
     "backend": "cd backend && npm run dev",
     "frontend": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
-    "build": "npm run install-all && cd frontend && npm run build",
-    "start": "cd backend && npm start"
+    "build": "cd frontend && npm install && npm run build",
+    "start": "node backend/index.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.9.4"
+  },
   "devDependencies": {
     "concurrently": "^8.2.2"
   }
