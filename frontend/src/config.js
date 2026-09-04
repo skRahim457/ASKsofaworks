@@ -1,1 +1,1 @@
-export const API_BASE = 'https://as-ksofaworks.vercel.app/api';
+export const API_BASE = 'https://asksofaworks.vercel.app/api';

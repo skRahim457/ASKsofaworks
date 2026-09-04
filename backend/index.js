@@ -590,7 +590,7 @@ const embeddedHtml = `<!doctype html>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ASKsofaworks</title>
-    <script type="module" crossorigin src="/assets/index-uUox5dmQ.js"></script>
+    <script type="module" crossorigin src="/assets/index-8TwLSXDe.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-BQmRmFaR.css">
   </head>
   <body>
