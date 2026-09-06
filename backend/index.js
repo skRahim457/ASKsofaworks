@@ -592,9 +592,8 @@ const embeddedHtml = `<!doctype html>
   </body>
 </html>`;
 
-// Mount API router on BOTH /api and root /
-app.use('/api', apiRouter);
-app.use('/', apiRouter);
+// Mount API router directly
+app.use(apiRouter);
 
 // Single Page Application Fallback for all storefront pages
 app.use((req, res, next) => {
