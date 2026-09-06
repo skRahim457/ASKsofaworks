@@ -177,13 +177,7 @@ apiRouter.get('/api', (req, res) => {
 });
 
 // Health Endpoint
-apiRouter.get('/health', (req, res) => {
-  res.json({ 
-    status: 'success', 
-    database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
-  });
-});
-apiRouter.get('/api/health', (req, res) => {
+apiRouter.get(['/health', '/api/health'], (req, res) => {
   res.json({ 
     status: 'success', 
     database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
@@ -191,7 +185,7 @@ apiRouter.get('/api/health', (req, res) => {
 });
 
 // Register
-apiRouter.post('/auth/register', async (req, res) => {
+apiRouter.post(['/auth/register', '/api/auth/register'], async (req, res) => {
   const { name, email, password, mobile } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -276,7 +270,7 @@ apiRouter.post('/auth/register', async (req, res) => {
 });
 
 // Login
-apiRouter.post('/auth/login', async (req, res) => {
+apiRouter.post(['/auth/login', '/api/auth/login'], async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ message: 'Mobile Number or Email Address and password are required' });
@@ -358,7 +352,7 @@ apiRouter.post('/auth/login', async (req, res) => {
 });
 
 // Profile
-apiRouter.get('/auth/me', authenticateToken, async (req, res) => {
+apiRouter.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
   try {
     if (!isConnected) {
@@ -379,7 +373,7 @@ apiRouter.get('/auth/me', authenticateToken, async (req, res) => {
 });
 
 // Products
-apiRouter.get('/products', async (req, res) => {
+apiRouter.get(['/products', '/api/products'], async (req, res) => {
   const { category, search, material, color, sort } = req.query;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -445,7 +439,7 @@ apiRouter.get('/products', async (req, res) => {
 });
 
 // Single Product
-apiRouter.get('/products/:id', async (req, res) => {
+apiRouter.get(['/products/:id', '/api/products/:id'], async (req, res) => {
   const productId = req.params.id;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -514,7 +508,7 @@ apiRouter.get('/products/:id', async (req, res) => {
 });
 
 // Orders
-apiRouter.post('/orders', authenticateToken, async (req, res) => {
+apiRouter.post(['/orders', '/api/orders'], authenticateToken, async (req, res) => {
   const { name, mobile, email, address, city, state, pincode, total_price, payment_method, items } = req.body;
   if (!name || !mobile || !email || !address || !city || !state || !pincode || !total_price || !payment_method || !items || items.length === 0) {
     return res.status(400).json({ message: 'Missing required order details' });
@@ -545,19 +539,19 @@ apiRouter.post('/orders', authenticateToken, async (req, res) => {
   });
 });
 
-apiRouter.get('/orders/my-orders', authenticateToken, async (req, res) => {
+apiRouter.get(['/orders/my-orders', '/api/orders/my-orders'], authenticateToken, async (req, res) => {
   const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
   res.json(myOrders);
 });
 
 // Wishlist
-apiRouter.get('/wishlist', authenticateToken, async (req, res) => {
+apiRouter.get(['/wishlist', '/api/wishlist'], authenticateToken, async (req, res) => {
   const userWishlist = fallbackWishlists.filter(w => w.user_id === req.user.id);
   const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
   res.json(prods);
 });
 
-apiRouter.post('/wishlist', authenticateToken, async (req, res) => {
+apiRouter.post(['/wishlist', '/api/wishlist'], authenticateToken, async (req, res) => {
   const { productId } = req.body;
   if (!productId) return res.status(400).json({ message: 'Product ID required' });
   const idx = fallbackWishlists.findIndex(w => w.user_id === req.user.id && w.product_id === productId);
@@ -570,7 +564,7 @@ apiRouter.post('/wishlist', authenticateToken, async (req, res) => {
 });
 
 // Inquiries
-apiRouter.post('/inquiries', async (req, res) => {
+apiRouter.post(['/inquiries', '/api/inquiries'], async (req, res) => {
   const { name, email, message } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ message: 'Name, email, and message are required' });
@@ -579,7 +573,7 @@ apiRouter.post('/inquiries', async (req, res) => {
   res.status(201).json({ message: 'Inquiry submitted successfully!' });
 });
 
-apiRouter.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+apiRouter.get(['/admin/inquiries', '/api/admin/inquiries'], authenticateToken, authorizeAdminOrSeller, async (req, res) => {
   res.json(fallbackInquiries);
 });
 
