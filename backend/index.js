@@ -98,6 +98,14 @@ function getFallbackProductList(category, search, material, color, sort, res) {
   return res.json(list);
 }
 
+// Vercel Serverless Path Normalizer
+app.use((req, res, next) => {
+  if (req.url && req.url.startsWith('/api/index.js')) {
+    req.url = req.originalUrl || req.headers['x-matched-path'] || req.url.replace('/api/index.js', '') || '/';
+  }
+  next();
+});
+
 // CORS Config
 app.use(cors({
   origin: true,
