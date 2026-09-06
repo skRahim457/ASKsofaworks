@@ -100,9 +100,16 @@ function getFallbackProductList(category, search, material, color, sort, res) {
 
 // Vercel Serverless Path Normalizer
 app.use((req, res, next) => {
-  if (req.url && req.url.startsWith('/api/index.js')) {
-    req.url = req.originalUrl || req.headers['x-matched-path'] || req.url.replace('/api/index.js', '') || '/';
+  let u = req.url || '/';
+  if (u.startsWith('/api/index.js')) {
+    u = req.originalUrl || req.headers['x-matched-path'] || u.replace('/api/index.js', '') || '/';
   }
+  if (!u.startsWith('/api') && !u.startsWith('/uploads') && !u.startsWith('/assets') && !u.includes('.')) {
+    if (['/health', '/products', '/auth', '/orders', '/wishlist', '/inquiries', '/admin'].some(p => u.startsWith(p))) {
+      u = '/api' + u;
+    }
+  }
+  req.url = u;
   next();
 });
 
