@@ -170,20 +170,22 @@ const safeParseArray = (val, defaultVal = []) => {
 // API ROUTER
 // ==========================================
 // Root API Endpoint
-app.get(['/api', '/'], (req, res) => {
-  res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
-});
+const handleRoot = (req, res) => res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
+app.get('/api', handleRoot);
+app.get('/api/', handleRoot);
 
 // Health Endpoint
-app.get(['/health', '/api/health'], (req, res) => {
+const handleHealth = (req, res) => {
   res.json({ 
     status: 'success', 
     database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
   });
-});
+};
+app.get('/health', handleHealth);
+app.get('/api/health', handleHealth);
 
 // Register
-app.post(['/auth/register', '/api/auth/register'], async (req, res) => {
+const handleRegister = async (req, res) => {
   const { name, email, password, mobile } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -265,10 +267,12 @@ app.post(['/auth/register', '/api/auth/register'], async (req, res) => {
     console.error('Register error:', error);
     res.status(500).json({ message: 'Error registering user' });
   }
-});
+};
+app.post('/auth/register', handleRegister);
+app.post('/api/auth/register', handleRegister);
 
 // Login
-app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
+const handleLogin = async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ message: 'Mobile Number or Email Address and password are required' });
@@ -347,10 +351,12 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Error signing in' });
   }
-});
+};
+app.post('/auth/login', handleLogin);
+app.post('/api/auth/login', handleLogin);
 
 // Profile
-app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
+const handleMe = async (req, res) => {
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
   try {
     if (!isConnected) {
@@ -368,10 +374,12 @@ app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Error fetching profile' });
   }
-});
+};
+app.get('/auth/me', authenticateToken, handleMe);
+app.get('/api/auth/me', authenticateToken, handleMe);
 
 // Products
-app.get(['/products', '/api/products'], async (req, res) => {
+const handleProducts = async (req, res) => {
   const { category, search, material, color, sort } = req.query;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -434,10 +442,12 @@ app.get(['/products', '/api/products'], async (req, res) => {
     console.warn('Database query error in /products, falling back safely:', error.message);
     return getFallbackProductList(category, search, material, color, sort, res);
   }
-});
+};
+app.get('/products', handleProducts);
+app.get('/api/products', handleProducts);
 
 // Single Product
-app.get(['/products/:id', '/api/products/:id'], async (req, res) => {
+const handleSingleProduct = async (req, res) => {
   const productId = req.params.id;
   const isConnected = mongoose.connection.readyState === 1 && process.env.MONGODB_URI;
 
@@ -503,10 +513,12 @@ app.get(['/products/:id', '/api/products/:id'], async (req, res) => {
     if (prod) return res.json({ ...prod, reviewsList: [], isEligibleToReview: true });
     res.status(500).json({ message: 'Error retrieving product details' });
   }
-});
+};
+app.get('/products/:id', handleSingleProduct);
+app.get('/api/products/:id', handleSingleProduct);
 
 // Orders
-app.post(['/orders', '/api/orders'], authenticateToken, async (req, res) => {
+const handleCreateOrder = async (req, res) => {
   const { name, mobile, email, address, city, state, pincode, total_price, payment_method, items } = req.body;
   if (!name || !mobile || !email || !address || !city || !state || !pincode || !total_price || !payment_method || !items || items.length === 0) {
     return res.status(400).json({ message: 'Missing required order details' });
@@ -535,21 +547,27 @@ app.post(['/orders', '/api/orders'], authenticateToken, async (req, res) => {
     orderId: newOrder.id,
     orderSummary: newOrder
   });
-});
+};
+app.post('/orders', authenticateToken, handleCreateOrder);
+app.post('/api/orders', authenticateToken, handleCreateOrder);
 
-app.get(['/orders/my-orders', '/api/orders/my-orders'], authenticateToken, async (req, res) => {
+const handleMyOrders = async (req, res) => {
   const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
   res.json(myOrders);
-});
+};
+app.get('/orders/my-orders', authenticateToken, handleMyOrders);
+app.get('/api/orders/my-orders', authenticateToken, handleMyOrders);
 
 // Wishlist
-app.get(['/wishlist', '/api/wishlist'], authenticateToken, async (req, res) => {
+const handleGetWishlist = async (req, res) => {
   const userWishlist = fallbackWishlists.filter(w => w.user_id === req.user.id);
   const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
   res.json(prods);
-});
+};
+app.get('/wishlist', authenticateToken, handleGetWishlist);
+app.get('/api/wishlist', authenticateToken, handleGetWishlist);
 
-app.post(['/wishlist', '/api/wishlist'], authenticateToken, async (req, res) => {
+const handleToggleWishlist = async (req, res) => {
   const { productId } = req.body;
   if (!productId) return res.status(400).json({ message: 'Product ID required' });
   const idx = fallbackWishlists.findIndex(w => w.user_id === req.user.id && w.product_id === productId);
@@ -559,21 +577,27 @@ app.post(['/wishlist', '/api/wishlist'], authenticateToken, async (req, res) => 
   }
   fallbackWishlists.push({ user_id: req.user.id, product_id: productId });
   res.json({ added: true, message: 'Added to wishlist' });
-});
+};
+app.post('/wishlist', authenticateToken, handleToggleWishlist);
+app.post('/api/wishlist', authenticateToken, handleToggleWishlist);
 
 // Inquiries
-app.post(['/inquiries', '/api/inquiries'], async (req, res) => {
+const handleCreateInquiry = async (req, res) => {
   const { name, email, message } = req.body;
   if (!name || !email || !message) {
     return res.status(400).json({ message: 'Name, email, and message are required' });
   }
   fallbackInquiries.unshift({ id: `inq_${Date.now()}`, ...req.body, created_at: new Date().toISOString() });
   res.status(201).json({ message: 'Inquiry submitted successfully!' });
-});
+};
+app.post('/inquiries', handleCreateInquiry);
+app.post('/api/inquiries', handleCreateInquiry);
 
-app.get(['/admin/inquiries', '/api/admin/inquiries'], authenticateToken, authorizeAdminOrSeller, async (req, res) => {
+const handleGetInquiries = async (req, res) => {
   res.json(fallbackInquiries);
-});
+};
+app.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, handleGetInquiries);
+app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, handleGetInquiries);
 
 const embeddedHtml = `<!doctype html>
 <html lang="en">
