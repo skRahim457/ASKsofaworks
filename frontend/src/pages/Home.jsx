@@ -173,41 +173,96 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Main Sliders Content */}
-      <section className="section-padding" style={{ paddingTop: '0.5rem' }}>
+      {/* Main Sliders & Featured Products Content */}
+      <section className="section-padding" style={{ paddingTop: '1.5rem' }}>
         <div className="section-container">
           
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: '5rem', color: 'var(--color-text-muted)' }}>
-              Polishing our furniture catalog...
+          {/* Featured Showroom Grid Section */}
+          <div style={{ marginBottom: '3.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+              <div>
+                <span className="subtitle" style={{ color: 'var(--color-gold-dark)' }}>Kavali Handcrafted Collection</span>
+                <h2 className="heading-md" style={{ margin: 0 }}>Featured Luxury Furnitures</h2>
+              </div>
+              <Link to="/category/all" className="btn btn-gold btn-sm">Explore All Products ({suggestedProducts.length})</Link>
             </div>
-          ) : (
-            <>
-              {/* Row 1: Suggested For You */}
-              <ProductSliderRow 
-                title="Suggested For You" 
-                products={suggestedProducts} 
-                trackRef={suggestedTrackRef} 
-                viewAllPath="/category/sofas"
-              />
 
-              {/* Row 2: Trending Sofa Deals */}
-              <ProductSliderRow 
-                title="Trending Sofa Deals" 
-                products={sofaDeals} 
-                trackRef={sofaTrackRef} 
-                viewAllPath="/category/sofas"
-              />
+            <div className="products-grid">
+              {suggestedProducts.slice(0, 8).map((prod) => {
+                const hasDiscount = prod.discount_price !== null;
+                const priceToDisplay = hasDiscount ? prod.discount_price : prod.price;
+                const starred = isInWishlist(prod.id);
 
-              {/* Row 3: Premium Beds */}
-              <ProductSliderRow 
-                title="Premium Beds & Frames" 
-                products={luxuryBeds} 
-                trackRef={bedTrackRef} 
-                viewAllPath="/category/beds"
-              />
-            </>
-          )}
+                return (
+                  <div key={prod.id} className="product-card">
+                    <div className="product-img-wrapper">
+                      <Link to={`/product/${prod.id}`}>
+                        <img src={prod.image_url} alt={prod.name} className="product-img" />
+                      </Link>
+                      
+                      <div className="rating-badge">
+                        <span>{prod.rating ? prod.rating.toFixed(1) : '5.0'}</span>
+                        <span>★</span>
+                      </div>
+
+                      <button 
+                        className={`product-wishlist-btn ${starred ? 'active' : ''}`}
+                        onClick={() => toggleWishlist(prod.id)}
+                        aria-label="Wishlist"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill={starred ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2">
+                          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                        </svg>
+                      </button>
+                    </div>
+                    
+                    <div className="product-card-info">
+                      <span className="product-card-category">{prod.material}</span>
+                      <h3 className="product-card-title">
+                        <Link to={`/product/${prod.id}`}>{prod.name}</Link>
+                      </h3>
+                      
+                      <div className="product-card-footer">
+                        <div className="price-block">
+                          <span className="price-current">₹{priceToDisplay.toLocaleString('en-IN')}</span>
+                          {hasDiscount && (
+                            <>
+                              <span className="price-original">₹{prod.price.toLocaleString('en-IN')}</span>
+                              <span className="discount-pct">{Math.round(((prod.price - priceToDisplay) / prod.price) * 100)}% OFF</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Row 1: Suggested For You */}
+          <ProductSliderRow 
+            title="Suggested For You" 
+            products={suggestedProducts} 
+            trackRef={suggestedTrackRef} 
+            viewAllPath="/category/sofas"
+          />
+
+          {/* Row 2: Trending Sofa Deals */}
+          <ProductSliderRow 
+            title="Trending Sofa Deals" 
+            products={sofaDeals} 
+            trackRef={sofaTrackRef} 
+            viewAllPath="/category/sofas"
+          />
+
+          {/* Row 3: Premium Beds */}
+          <ProductSliderRow 
+            title="Premium Beds & Frames" 
+            products={luxuryBeds} 
+            trackRef={bedTrackRef} 
+            viewAllPath="/category/beds"
+          />
 
         </div>
       </section>
