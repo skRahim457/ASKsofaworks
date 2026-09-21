@@ -1,2 +1,2 @@
-/api/*  https://as-ksofaworks.vercel.app/api/:splat  200!
+/api/*  https://asksofaworks.vercel.app/api/:splat  200!
 /*      /index.html                                   200
