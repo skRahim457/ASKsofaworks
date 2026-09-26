@@ -101,7 +101,8 @@ function getFallbackProductList(category, search, material, color, sort, res) {
 // Vercel / Proxy Path Normalizer
 app.use((req, res, next) => {
   if (req.url.startsWith('/api/index.js')) {
-    req.url = req.url.replace('/api/index.js', '') || '/';
+    const rawPath = req.originalUrl || req.headers['x-matched-path'] || req.headers['x-forwarded-uri'] || '/';
+    req.url = rawPath.replace('/api/index.js', '') || '/';
   }
   next();
 });
