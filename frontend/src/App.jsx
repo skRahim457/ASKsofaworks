@@ -84,7 +84,7 @@ const AppLayout = () => {
   return (
     <>
       <Navbar />
-      <main style={{ minHeight: '80vh' }}>
+      <main>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/category/:categoryId" element={<CategoryPage />} />
