@@ -98,18 +98,11 @@ function getFallbackProductList(category, search, material, color, sort, res) {
   return res.json(list);
 }
 
-// Vercel Serverless Path Normalizer
+// Vercel / Proxy Path Normalizer
 app.use((req, res, next) => {
-  let u = req.url || '/';
-  if (u.startsWith('/api/index.js')) {
-    u = req.originalUrl || req.headers['x-matched-path'] || u.replace('/api/index.js', '') || '/';
+  if (req.url.startsWith('/api/index.js')) {
+    req.url = req.url.replace('/api/index.js', '') || '/';
   }
-  if (!u.startsWith('/api') && !u.startsWith('/uploads') && !u.startsWith('/assets') && !u.includes('.')) {
-    if (['/health', '/products', '/auth', '/orders', '/wishlist', '/inquiries', '/admin'].some(p => u.startsWith(p))) {
-      u = '/api' + u;
-    }
-  }
-  req.url = u;
   next();
 });
 
@@ -184,10 +177,11 @@ const safeParseArray = (val, defaultVal = []) => {
 // ==========================================
 // API ROUTER
 // ==========================================
+const apiRouter = express.Router();
+
 // Root API Endpoint
 const handleRoot = (req, res) => res.json({ status: 'success', message: 'ASK Sofa Works Backend API is running' });
-app.get('/api', handleRoot);
-app.get('/api/', handleRoot);
+apiRouter.get('/', handleRoot);
 
 // Health Endpoint
 const handleHealth = (req, res) => {
@@ -196,8 +190,7 @@ const handleHealth = (req, res) => {
     database: mongoose.connection.readyState === 1 && process.env.MONGODB_URI ? 'MongoDB Atlas (Connected)' : 'In-Memory (Active Fallback)' 
   });
 };
-app.get('/health', handleHealth);
-app.get('/api/health', handleHealth);
+apiRouter.get('/health', handleHealth);
 
 // Register
 const handleRegister = async (req, res) => {
@@ -283,8 +276,7 @@ const handleRegister = async (req, res) => {
     res.status(500).json({ message: 'Error registering user' });
   }
 };
-app.post('/auth/register', handleRegister);
-app.post('/api/auth/register', handleRegister);
+apiRouter.post('/auth/register', handleRegister);
 
 // Login
 const handleLogin = async (req, res) => {
@@ -367,8 +359,7 @@ const handleLogin = async (req, res) => {
     res.status(500).json({ message: 'Error signing in' });
   }
 };
-app.post('/auth/login', handleLogin);
-app.post('/api/auth/login', handleLogin);
+apiRouter.post('/auth/login', handleLogin);
 
 // Profile
 const handleMe = async (req, res) => {
@@ -390,8 +381,7 @@ const handleMe = async (req, res) => {
     res.status(500).json({ message: 'Error fetching profile' });
   }
 };
-app.get('/auth/me', authenticateToken, handleMe);
-app.get('/api/auth/me', authenticateToken, handleMe);
+apiRouter.get('/auth/me', authenticateToken, handleMe);
 
 // Products
 const handleProducts = async (req, res) => {
@@ -458,8 +448,7 @@ const handleProducts = async (req, res) => {
     return getFallbackProductList(category, search, material, color, sort, res);
   }
 };
-app.get('/products', handleProducts);
-app.get('/api/products', handleProducts);
+apiRouter.get('/products', handleProducts);
 
 // Single Product
 const handleSingleProduct = async (req, res) => {
@@ -529,8 +518,7 @@ const handleSingleProduct = async (req, res) => {
     res.status(500).json({ message: 'Error retrieving product details' });
   }
 };
-app.get('/products/:id', handleSingleProduct);
-app.get('/api/products/:id', handleSingleProduct);
+apiRouter.get('/products/:id', handleSingleProduct);
 
 // Orders
 const handleCreateOrder = async (req, res) => {
@@ -563,15 +551,13 @@ const handleCreateOrder = async (req, res) => {
     orderSummary: newOrder
   });
 };
-app.post('/orders', authenticateToken, handleCreateOrder);
-app.post('/api/orders', authenticateToken, handleCreateOrder);
+apiRouter.post('/orders', authenticateToken, handleCreateOrder);
 
 const handleMyOrders = async (req, res) => {
   const myOrders = fallbackOrders.filter(o => o.user_id === req.user.id);
   res.json(myOrders);
 };
-app.get('/orders/my-orders', authenticateToken, handleMyOrders);
-app.get('/api/orders/my-orders', authenticateToken, handleMyOrders);
+apiRouter.get('/orders/my-orders', authenticateToken, handleMyOrders);
 
 // Wishlist
 const handleGetWishlist = async (req, res) => {
@@ -579,8 +565,7 @@ const handleGetWishlist = async (req, res) => {
   const prods = userWishlist.map(w => fallbackProducts.find(p => p.id === w.product_id)).filter(Boolean);
   res.json(prods);
 };
-app.get('/wishlist', authenticateToken, handleGetWishlist);
-app.get('/api/wishlist', authenticateToken, handleGetWishlist);
+apiRouter.get('/wishlist', authenticateToken, handleGetWishlist);
 
 const handleToggleWishlist = async (req, res) => {
   const { productId } = req.body;
@@ -593,8 +578,7 @@ const handleToggleWishlist = async (req, res) => {
   fallbackWishlists.push({ user_id: req.user.id, product_id: productId });
   res.json({ added: true, message: 'Added to wishlist' });
 };
-app.post('/wishlist', authenticateToken, handleToggleWishlist);
-app.post('/api/wishlist', authenticateToken, handleToggleWishlist);
+apiRouter.post('/wishlist', authenticateToken, handleToggleWishlist);
 
 // Inquiries
 const handleCreateInquiry = async (req, res) => {
@@ -605,14 +589,16 @@ const handleCreateInquiry = async (req, res) => {
   fallbackInquiries.unshift({ id: `inq_${Date.now()}`, ...req.body, created_at: new Date().toISOString() });
   res.status(201).json({ message: 'Inquiry submitted successfully!' });
 };
-app.post('/inquiries', handleCreateInquiry);
-app.post('/api/inquiries', handleCreateInquiry);
+apiRouter.post('/inquiries', handleCreateInquiry);
 
 const handleGetInquiries = async (req, res) => {
   res.json(fallbackInquiries);
 };
-app.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, handleGetInquiries);
-app.get('/api/admin/inquiries', authenticateToken, authorizeAdminOrSeller, handleGetInquiries);
+apiRouter.get('/admin/inquiries', authenticateToken, authorizeAdminOrSeller, handleGetInquiries);
+
+// Mount API Router on both /api and /
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
 
 const embeddedHtml = `<!doctype html>
 <html lang="en">
@@ -644,7 +630,7 @@ app.use((req, res, next) => {
 
 module.exports = app;
 
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Backend server is running on port ${PORT}`);
   });
