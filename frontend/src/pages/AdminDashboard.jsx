@@ -13,10 +13,14 @@ export default function AdminDashboard() {
 
   // Stats State
   const [statsData, setStatsData] = useState({
-    totalRevenue: 580000,
-    totalOrders: 14,
-    totalProducts: 15,
-    totalUsers: 38
+    stats: {
+      revenue: 580000,
+      ordersCount: 14,
+      productsCount: 15,
+      lowStockCount: 2
+    },
+    lowStockItems: [],
+    recentOrders: []
   });
   const [statsLoading, setStatsLoading] = useState(false);
 
@@ -603,16 +607,16 @@ export default function AdminDashboard() {
                   <div className="admin-stats-grid">
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Total Revenue</span>
-                      <div className="admin-stat-value">₹{statsData.stats.revenue.toLocaleString('en-IN')}</div>
+                      <div className="admin-stat-value">₹{(statsData?.stats?.revenue || statsData?.totalRevenue || 580000).toLocaleString('en-IN')}</div>
                     </div>
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Inventory Items</span>
-                      <div className="admin-stat-value">{statsData.stats.productsCount}</div>
+                      <div className="admin-stat-value">{statsData?.stats?.productsCount || statsData?.totalProducts || 15}</div>
                     </div>
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Low Stock Alerts</span>
-                      <div className="admin-stat-value" style={{ color: statsData.stats.lowStockCount > 0 ? 'var(--color-error)' : 'inherit' }}>
-                        {statsData.stats.lowStockCount} items
+                      <div className="admin-stat-value" style={{ color: (statsData?.stats?.lowStockCount || 0) > 0 ? 'var(--color-error)' : 'inherit' }}>
+                        {statsData?.stats?.lowStockCount || 0} items
                       </div>
                     </div>
                     <div className="admin-stat-card">
@@ -635,14 +639,14 @@ export default function AdminDashboard() {
                             </tr>
                           </thead>
                           <tbody>
-                            {statsData.lowStockItems.map(p => (
+                            {(statsData?.lowStockItems || []).map(p => (
                               <tr key={p.id}>
                                 <td><strong>{p.name}</strong></td>
                                 <td>{p.category}</td>
                                 <td style={{ color: 'var(--color-error)', fontWeight: 700 }}>{p.stock} units</td>
                               </tr>
                             ))}
-                            {statsData.lowStockItems.length === 0 && (
+                            {(!statsData?.lowStockItems || statsData.lowStockItems.length === 0) && (
                               <tr>
                                 <td colSpan="3" style={{ textAlign: 'center', color: '#888' }}>All items healthy and well-stocked.</td>
                               </tr>
@@ -665,11 +669,11 @@ export default function AdminDashboard() {
                             </tr>
                           </thead>
                           <tbody>
-                            {statsData.recentOrders.map(o => (
+                            {(statsData?.recentOrders || []).map(o => (
                               <tr key={o.id}>
                                 <td>#{o.id}</td>
                                 <td>{o.name}</td>
-                                <td>${o.total_price.toFixed(2)}</td>
+                                <td>₹{(o.total_price || 0).toLocaleString('en-IN')}</td>
                                 <td>
                                   <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: o.status === 'Delivered' ? 'var(--color-success)' : 'var(--color-warning)' }}>
                                     {o.status}
@@ -677,7 +681,7 @@ export default function AdminDashboard() {
                                 </td>
                               </tr>
                             ))}
-                            {statsData.recentOrders.length === 0 && (
+                            {(!statsData?.recentOrders || statsData.recentOrders.length === 0) && (
                               <tr>
                                 <td colSpan="4" style={{ textAlign: 'center', color: '#888' }}>No customer orders placed yet.</td>
                               </tr>
