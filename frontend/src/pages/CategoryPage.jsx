@@ -64,17 +64,18 @@ export default function CategoryPage() {
     // Filter by Materials
     if (selectedMaterials.length > 0) {
       result = result.filter((prod) => 
-        selectedMaterials.some((mat) => prod.material.toLowerCase().includes(mat.toLowerCase()))
+        prod && prod.material && selectedMaterials.some((mat) => String(prod.material).toLowerCase().includes(mat.toLowerCase()))
       );
     }
 
     // Filter by Colors
     if (selectedColors.length > 0) {
-      result = result.filter((prod) => 
-        prod.colors.some((col) => 
-          selectedColors.some((selCol) => col.toLowerCase().includes(selCol.toLowerCase()))
-        )
-      );
+      result = result.filter((prod) => {
+        const colorsArr = Array.isArray(prod?.colors) ? prod.colors : (typeof prod?.colors === 'string' ? [prod.colors] : []);
+        return colorsArr.some((col) => 
+          selectedColors.some((selCol) => String(col).toLowerCase().includes(selCol.toLowerCase()))
+        );
+      });
     }
 
     // Filter by Price Range

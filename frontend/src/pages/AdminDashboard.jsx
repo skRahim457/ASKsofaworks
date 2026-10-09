@@ -607,16 +607,16 @@ export default function AdminDashboard() {
                   <div className="admin-stats-grid">
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Total Revenue</span>
-                      <div className="admin-stat-value">₹{(statsData?.stats?.revenue || statsData?.totalRevenue || 580000).toLocaleString('en-IN')}</div>
+                      <div className="admin-stat-value">₹{(statsData?.stats?.revenue ?? statsData?.totalRevenue ?? 580000).toLocaleString('en-IN')}</div>
                     </div>
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Inventory Items</span>
-                      <div className="admin-stat-value">{statsData?.stats?.productsCount || statsData?.totalProducts || 15}</div>
+                      <div className="admin-stat-value">{statsData?.stats?.productsCount ?? statsData?.totalProducts ?? 15}</div>
                     </div>
                     <div className="admin-stat-card">
                       <span className="admin-stat-label">Low Stock Alerts</span>
                       <div className="admin-stat-value" style={{ color: (statsData?.stats?.lowStockCount || 0) > 0 ? 'var(--color-error)' : 'inherit' }}>
-                        {statsData?.stats?.lowStockCount || 0} items
+                        {statsData?.stats?.lowStockCount ?? 0} items
                       </div>
                     </div>
                     <div className="admin-stat-card">
